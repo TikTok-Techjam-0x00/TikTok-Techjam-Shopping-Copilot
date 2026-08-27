@@ -107,6 +107,20 @@ class QueryConstructionTest(unittest.TestCase):
             "lightweight shoes",
         )
 
+    def test_cjk_content_is_removed_at_the_retrieval_boundary(self) -> None:
+        state = {
+            "hard_constraint": {"category": "hiking boots " + "\u767b\u5c71\u978b"},
+            "soft_constraint": {"feature": "waterproof " + "\u9632\u6c34"},
+        }
+        self.assertEqual(
+            build_retrieval_query("ignored", state),
+            "hiking boots waterproof",
+        )
+        self.assertEqual(
+            build_retrieval_query("\u5e2e\u6211\u627e running shoes"),
+            "running shoes",
+        )
+
 
 class BM25RetrieverTest(unittest.TestCase):
     def setUp(self) -> None:

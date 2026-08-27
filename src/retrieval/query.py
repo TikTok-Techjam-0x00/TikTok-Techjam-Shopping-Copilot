@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import re
 from typing import Any
 
 
 _CONSTRAINT_FIELDS = ("hard_constraint", "soft_constraint")
 _DIRECT_STATE_FIELDS = ("category", "use_case", "preferences", "user_preferences")
 _RANGE_KEYS = frozenset({"min", "minimum", "max", "maximum", "unit", "currency"})
+CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+")
+
+
+def _retrieval_safe(value: object) -> str:
+    return " ".join(CJK_RE.sub(" ", str(value or "")).split())
 
 
 def _state_value(state: object, field: str, default: Any = None) -> Any:
@@ -117,8 +123,8 @@ def build_retrieval_query(
     if state is not None:
         state_terms = _active_state_terms(state)
         if state_terms:
-            return " ".join(state_terms)
+            return _retrieval_safe(" ".join(state_terms))
     raw_query = query
     if (raw_query is None or not str(raw_query).strip()) and state is not None:
         raw_query = _state_value(state, "user_message", "")
-    return " ".join(str(raw_query or "").split())
+    return _retrieval_safe(raw_query)

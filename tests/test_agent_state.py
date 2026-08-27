@@ -53,9 +53,9 @@ class StatefulAgentTest(unittest.TestCase):
         state = self.agent.get_state("session-a")
 
         self.assertEqual(response["recommendations"][0]["parent_asin"], "HIKE1")
-        self.assertEqual(state["category"], "black hiking boots")
-        self.assertEqual(state["hard_constraints"]["color"], "black")
-        self.assertEqual(state["turn_count"], 1)
+        self.assertEqual(state["hard_constraint"]["category"]["values"], ["black hiking boots"])
+        self.assertEqual(state["hard_constraint"]["color"]["values"], ["black"])
+        self.assertEqual(state["turn"], 1)
         self.assertIn(response["ask_attribute"], state["asked_attributes"])
 
     def test_sessions_are_isolated(self) -> None:
@@ -64,8 +64,11 @@ class StatefulAgentTest(unittest.TestCase):
 
         self.agent.respond("first", "I want running shoes.", 1, 10)
 
-        self.assertEqual(self.agent.get_state("first")["category"], "running shoes")
-        self.assertIsNone(self.agent.get_state("second")["category"])
+        self.assertEqual(
+            self.agent.get_state("first")["hard_constraint"]["category"]["values"],
+            ["running shoes"],
+        )
+        self.assertNotIn("category", self.agent.get_state("second")["hard_constraint"])
 
     def test_respond_requires_reset(self) -> None:
         with self.assertRaises(RuntimeError):

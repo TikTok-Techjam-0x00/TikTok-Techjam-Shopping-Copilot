@@ -7,9 +7,9 @@ external model or another advanced pipeline component fails.
 ## Public interface
 
 ```python
-from starter.conversation import create_state, retrieval_query, update_state
+from src.state import create_state, retrieval_query, update_state
 
-state = create_state(user_profile)
+state = create_state(session_id, user_profile)
 update_state(state, user_message, turn=1, asked_attribute=None)
 
 retrieval_text = retrieval_query(state)  # input for keyword/dense retrieval
@@ -24,19 +24,18 @@ pipeline_state = state.to_dict()         # JSON-safe input for other modules
 Important fields include:
 
 - `intent` and `intent_confidence`
-- `category`
-- `hard_constraints`
-- `soft_preferences`
-- `negative_constraints`
-- `known_attributes`
-- `asked_attributes` and `rejected_attributes`
-- `turn_count` / `turn`
+- `hard_constraint: AttributeMap`
+- `soft_constraint: AttributeMap`
+- `rejected_values: AttributeMap`
+- `no_prefernce: list[AttributeName]`
+- `asked_attributes`
+- `session_id`, `user_message`, and `turn`
 - `override_detected`
 - `user_profile`
 
-The aliases `known_attributes`, `asked_attributes`, `rejected_attributes`, and
-`turn` are directly consumable by the current 3B dialogue-policy helper in
-`src/three_b.py`.
+The object directly implements the protocols consumed by `src/retrieval`,
+`src/reranking`, and `src/dialogue`. Compatibility imports remain in `starter/`
+for callers that used the earlier module locations.
 
 ## Override behavior
 
@@ -50,7 +49,7 @@ preferences are added.
 
 ```bash
 python3 -m unittest -v
-python3 -m evaluator.local_evaluator --output results-stateful.json
+python3 -m evaluator.local_evaluator --output results-attribute-map.json
 ```
 
 The current test suite covers intent routing, slot extraction, state

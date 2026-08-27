@@ -186,6 +186,7 @@ starter/agent.py                  editable weak starter
 evaluator/local_evaluator.py      public-set simulator and scorer
 src/attribute.py                  shared shopping-attribute contract
 src/item.py                       shared Item and candidate contracts
+src/state/                        intent routing and conversation state
 src/reranking/                    candidate reranking module and tests
 src/dialogue/                     clarification-question module and tests
 examples/reranker_demo.py         runnable Reranking integration example

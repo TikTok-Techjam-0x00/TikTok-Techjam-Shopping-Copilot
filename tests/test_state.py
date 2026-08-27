@@ -2,51 +2,43 @@ from __future__ import annotations
 
 import unittest
 
-from starter.state import ShoppingState, StateUpdate
+from src.attribute import AttributeName
+from src.state import ShoppingState, StateUpdate
 
 
 class ShoppingStateTest(unittest.TestCase):
     def test_sessions_do_not_share_mutable_state(self) -> None:
-        first = ShoppingState()
-        second = ShoppingState()
-
-        first.add_hard_constraint("color", "blue")
-        first.add_soft_preference("comfortable")
-
-        self.assertEqual(second.hard_constraints, {})
-        self.assertEqual(second.soft_preferences, [])
+        first = ShoppingState("first")
+        second = ShoppingState("second")
+        first.apply_update(StateUpdate.from_raw(hard_constraint={"color": "blue"}))
+        self.assertEqual(second.hard_constraint, {})
 
     def test_accumulates_constraints_across_updates(self) -> None:
-        state = ShoppingState()
-
-        state.apply_update(StateUpdate(category="running shoes"))
-        state.apply_update(StateUpdate(hard_constraints={"price_max": 120.0}))
-
+        state = ShoppingState("session")
+        state.apply_update(StateUpdate.from_raw(hard_constraint={"category": "running shoes"}))
+        state.apply_update(StateUpdate.from_raw(hard_constraint={"budget": {"max": 120, "unit": "USD"}}))
         self.assertEqual(state.category, "running shoes")
-        self.assertEqual(state.hard_constraints["price_max"], 120.0)
+        self.assertEqual(state.hard_constraint[AttributeName.BUDGET].maximum, 120.0)
 
-    def test_new_category_replaces_old_category(self) -> None:
-        state = ShoppingState(category="running shoes")
-
-        state.apply_update(StateUpdate(category="hiking boots", override=True))
-
+    def test_override_replaces_category_and_stale_use_case(self) -> None:
+        state = ShoppingState("session")
+        state.apply_update(StateUpdate.from_raw(hard_constraint={"category": "running shoes", "use_case": "running"}))
+        state.apply_update(StateUpdate.from_raw(hard_constraint={"category": "hiking boots", "use_case": "hiking"}, override=True))
         self.assertEqual(state.category, "hiking boots")
+        self.assertEqual(state.hard_constraint[AttributeName.USE_CASE].values, ["hiking"])
 
-    def test_rejected_attribute_removes_constraint(self) -> None:
-        state = ShoppingState(hard_constraints={"material": "cotton"})
+    def test_no_preference_removes_constraint(self) -> None:
+        state = ShoppingState("session")
+        state.apply_update(StateUpdate.from_raw(hard_constraint={"material": "cotton"}))
+        state.apply_update(StateUpdate.from_raw(no_preference={"material"}))
+        self.assertNotIn(AttributeName.MATERIAL, state.hard_constraint)
+        self.assertIn(AttributeName.MATERIAL, state.no_prefernce)
 
-        state.apply_update(StateUpdate(rejected_attributes={"material"}))
-
-        self.assertNotIn("material", state.hard_constraints)
-        self.assertIn("material", state.rejected_attributes)
-
-    def test_new_value_restores_rejected_attribute(self) -> None:
-        state = ShoppingState(rejected_attributes={"color"})
-
-        state.apply_update(StateUpdate(hard_constraints={"color": "black"}))
-
-        self.assertEqual(state.hard_constraints["color"], "black")
-        self.assertNotIn("color", state.rejected_attributes)
+    def test_new_value_restores_no_preference_attribute(self) -> None:
+        state = ShoppingState("session", no_prefernce=[AttributeName.COLOR])
+        state.apply_update(StateUpdate.from_raw(hard_constraint={"color": "black"}))
+        self.assertEqual(state.hard_constraint[AttributeName.COLOR].values, ["black"])
+        self.assertNotIn(AttributeName.COLOR, state.no_prefernce)
 
 
 if __name__ == "__main__":
