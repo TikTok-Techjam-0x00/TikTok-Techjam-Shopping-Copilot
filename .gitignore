@@ -7,6 +7,7 @@ __pycache__/
 .env
 results.json
 artifacts/
+results-*.json
 data/catalog.jsonl
 data/catalog.jsonl.gz
 data/SHA256SUMS
