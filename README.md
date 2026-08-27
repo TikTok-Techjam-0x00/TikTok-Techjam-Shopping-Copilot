@@ -67,6 +67,95 @@ class Agent:
 
 `ask_attribute` is one of `category`, `material`, `color`, `size`, `style`, `brand`, `budget`, `feature`, `use_case`, `other`, or `null`. See `docs/agent_api_contract.json`.
 
+## Team Pipeline Contracts
+
+The implementation under `src/` uses shared data contracts so that State,
+Retrieval, Reranking, Dialogue, and the final Agent exchange the same object
+shapes.
+
+### Product and candidate objects
+
+- `Item` represents one product from `data/catalog.jsonl`.
+- `Candidate` is a Retrieval result and contains an `Item` plus retrieval
+  scores.
+- `RankedCandidate` is a Reranking result and contains an `Item` plus reranking
+  scores, matched attributes, and hard-constraint violations.
+- `Candidates100` and `Candidates10` are the list aliases exchanged between
+  Retrieval, Reranking, and Dialogue.
+
+These objects use composition: `Candidate.item` and `RankedCandidate.item`
+refer to an `Item`; candidate classes do not inherit from `Item`.
+
+### Standard shopping attributes
+
+`shopping_state.hard_constraint` and `shopping_state.soft_constraint` use the
+following common type:
+
+```python
+from src.attribute import AttributeMap, AttributeName, normalize_attribute_map
+
+hard_constraint: AttributeMap = normalize_attribute_map({
+    "category": ["running shoes"],
+    "budget": {"max": 100, "unit": "USD"},
+})
+
+soft_constraint: AttributeMap = normalize_attribute_map({
+    "color": ["black"],
+    "feature": ["lightweight", "comfortable"],
+})
+
+no_prefernce: list[AttributeName] = [AttributeName.BRAND]
+```
+
+The canonical internal attribute names are:
+
+```text
+category, material, color, size, fit, style, pattern, brand,
+budget, feature, use_case, target_user, rating, quantity, others
+```
+
+Each entry is an `AttributeValue` with one stable shape:
+
+```python
+AttributeValue(
+    values=["M"],
+    minimum=None,
+    maximum=None,
+    unit=None,
+    details={"waist": ["32 inches"]},
+)
+```
+
+- `values` stores one or more categorical/text values.
+- `minimum` and `maximum` store numeric ranges such as budget or rating.
+- `unit` stores the currency or measurement unit.
+- `details` stores structured subfields such as product dimensions.
+
+Call `normalize_attribute_map()` on rule-based or model-generated extraction
+results before saving them in `shopping_state`. It normalizes common catalog
+aliases such as `Fabric Type -> material`, `Department -> target_user`, and
+`Occasion -> use_case`. An unknown field is not discarded; it is retained under
+`AttributeName.OTHERS`:
+
+```python
+normalize_attribute_map({"Care Instructions": "hand wash only"})
+
+# Equivalent normalized content:
+{
+    AttributeName.OTHERS: AttributeValue(
+        details={"care_instructions": ["hand wash only"]}
+    )
+}
+```
+
+Internal attributes are richer than the evaluator's `ask_attribute` enum.
+Use `to_official_ask_attribute()` before returning a question to the official
+Agent interface; for example, internal `fit` maps to official `size`, while an
+unsupported or fallback attribute maps to official `other`.
+
+See [`src/reranking/README.md`](src/reranking/README.md) for the full Reranking
+input/output contract and runnable examples.
+
 ## Technical Metrics
 
 - **Hit Rate@10:** fraction of sessions that find the target within 10 turns.
@@ -95,6 +184,11 @@ docs/evaluation_config.json       scoring configuration
 docs/baseline_results.json        reproducible weak-starter reference score
 starter/agent.py                  editable weak starter
 evaluator/local_evaluator.py      public-set simulator and scorer
+src/attribute.py                  shared shopping-attribute contract
+src/item.py                       shared Item and candidate contracts
+src/reranking/                    candidate reranking module and tests
+src/dialogue/                     clarification-question module and tests
+examples/reranker_demo.py         runnable Reranking integration example
 ```
 
 ## Judging and Submission Policy
