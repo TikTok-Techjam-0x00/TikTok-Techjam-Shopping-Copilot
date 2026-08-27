@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .env
+.venv/
 results.json
 data/catalog.jsonl
 data/releases/
