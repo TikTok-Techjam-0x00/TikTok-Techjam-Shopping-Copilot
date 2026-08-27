@@ -1,89 +1,115 @@
 # Reranking（Module 3A）
 
-本目录负责将 Retrieval 返回的最多 100 个候选商品，结合模块 2 维护的
-`shopping_state` 重新排序，并输出最多 10 个 `reranked_candidate`。
+本目录负责将 Retrieval 返回的最多 100 个候选，结合模块 2 维护的
+`shopping_state` 重新排序，并输出最多 10 个 `RankedCandidate`。
 
-当前排序算法是可运行的占位基线。接口、对象和测试已经固定，后续可以将
-占位打分替换为 Cross-Encoder、Learning-to-Rank、MMR 或更强的规则，而不必
-修改 Retrieval、Dialogue 和官方 Agent 的数据边界。
+当前算法是可运行的占位基线。共享对象和模块边界已经固定，后续可以在不改变
+上下游接口的前提下替换为 Cross-Encoder、Learning-to-Rank、MMR 或更强规则。
 
-## 1. 模块位置与数据流
+## 1. 数据流
 
 ```text
 Official evaluator
   reset(session_id, user_profile)
   respond(session_id, user_message, turn, top_k)
-                |
-                v
+                 |
+                 v
 Module 2: shopping_state
-                |
-                +-------------------------+
-                |                         |
-                v                         v
-Module 1: Retrieval                 Module 3A: Reranking
-output candidates_100  -----------> input candidates_100
-                                      + shopping_state
-                                            |
-                                            v
-                                 output candidates_10
-                                            |
-                         +------------------+------------------+
-                         v                                     v
-                 Module 3B: Dialogue                  Official response
-                 clarification question               recommendations
+                 |
+                 +---------------------------+
+                 |                           |
+                 v                           v
+Module 1: Retrieval                    Module 3A: Reranking
+output candidates_100  --------------> shopping_state + candidates_100
+                                             |
+                                             v
+                                  output candidates_10
+                                             |
+                         +-------------------+-------------------+
+                         v                                       v
+                 Module 3B: Dialogue                    Official response
+                 clarification question                 recommendations
 ```
 
 主要文件：
 
-- `src/item.py`：跨模块共用的商品对象。
-- `src/reranking/reranker.py`：候选预处理、占位打分、排序和官方格式转换。
-- `src/reranking/test_reranker.py`：对象接口与 Reranking 单元测试。
-- `examples/reranker_demo.py`：可直接运行的模拟输入输出。
+- `src/item.py`：跨模块共享的数据类。
+- `src/reranking/reranker.py`：候选清洗、占位打分、排序和官方格式转换。
+- `src/reranking/test_reranker.py`：对象契约及 Reranking 测试。
+- `examples/reranker_demo.py`：完整模拟输入输出。
 
-推荐使用显式导入：
+推荐显式导入：
 
 ```python
-from src.item import item, candidate, reranked_candidate
+from src.item import Item, Candidate, RankedCandidate
 from src.reranking import rerank, recommendations_from_ranking
 ```
 
-## 2. 全局共享类
+## 2. 为什么使用组合
 
-以下对象由多个模块共同使用，不属于某一个排序算法的私有实现。
+`Item` 是 catalog 商品；`Candidate` 和 `RankedCandidate` 是算法阶段的结果，
+它们不是新的商品类型。因此使用 has-a 关系，而不是 is-a 继承：
 
-### 2.1 `item`
+```text
+Candidate.item ---------> Item
+RankedCandidate.item ---> Item
+```
 
-`item` 表示官方 catalog 中的一件商品。它只包含 participant-visible 的 10 个
-字段，字段顺序和 `data/catalog.jsonl` 保持一致。
+代码关系：
 
-| 字段 | Python 类型 | 说明 |
+```python
+class Candidate:
+    item: Item
+
+class RankedCandidate:
+    item: Item
+```
+
+优点：
+
+- catalog 商品字段只有一份，不会在不同阶段重复复制。
+- BM25、Dense、Reranking 分数不会污染 `Item`。
+- 各模块职责清晰，后续增加新模型分数只改包装类。
+- `RankedCandidate.item` 可以直接复用输入 `Candidate.item`。
+
+## 3. 全局共享类
+
+这些类定义在 `src/item.py`，可能被 Retrieval、Reranking、Dialogue 和 Agent
+共同使用。
+
+### 3.1 `Item`
+
+`Item` 对应官方 `data/catalog.jsonl` 中的一件商品，只包含 participant-visible
+的 10 个字段。
+
+| 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `parent_asin` | `str` | 商品唯一标识；官方最终按它评分，不能为空 |
+| `parent_asin` | `str` | 商品唯一 ID，不能为空；官方最终按它评分 |
 | `title` | `str` | 商品标题 |
 | `features` | `list[str]` | 商品卖点列表 |
 | `description` | `list[str]` | 商品描述列表 |
-| `price` | `float \| None` | 商品价格，数据缺失时为 `None` |
+| `price` | `float \| None` | 商品价格 |
 | `categories` | `list[str]` | 从大类到细类的分类路径 |
 | `details` | `dict[str, Any]` | 材质、颜色、尺寸等非固定详情 |
 | `average_rating` | `float \| None` | 平均评分 |
 | `rating_number` | `int \| None` | 评分数量 |
-| `store` | `str` | 店铺或品牌相关文本 |
+| `store` | `str \| None` | 店铺或品牌相关文本 |
 
-从 catalog 字典创建对象：
+从 catalog 记录创建：
 
 ```python
-from src.item import item
+from src.item import Item
 
-product = item.from_dict(catalog_record)
+product = Item.from_dict(catalog_record)
 ```
 
-转回可 JSON 序列化的官方数据形状：
+转回可 JSON 序列化的 catalog 形状：
 
 ```python
 product_dict = product.to_dict()
 ```
 
-`item` 同时实现了 `Mapping`，因此新旧代码都可以读取它：
+`Item` 实现了 `Mapping`，兼容对象和字典两种读取方式：
 
 ```python
 product.parent_asin
@@ -91,83 +117,115 @@ product["parent_asin"]
 product.get("price")
 ```
 
-### 2.2 `candidate`
+### 3.2 `Candidate`
 
-`candidate` 继承 `item`，是 Retrieval 输出到 Reranking 的单个候选。
+`Candidate` 是 Retrieval 输出到 Reranking 的单个候选。它通过 `item` 组合
+`Item`，并保存 Retrieval 阶段分数。
 
-在所有 `item` 字段之外，它新增：
-
-| 字段 | Python 类型 | 说明 |
+| 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `retrieval_score` | `float \| None` | Retrieval 相关性分数，约定越高越好 |
+| `item` | `Item` | catalog 商品对象 |
+| `bm25_score` | `float \| None` | BM25 分数 |
+| `dense_score` | `float \| None` | Dense Retrieval 分数 |
+| `retrieval_score` | `float \| None` | Retrieval 融合分数，约定越高越好 |
 | `retrieval_rank` | `int \| None` | Retrieval 原始名次，从 1 开始 |
 
-Retrieval 推荐这样创建对象：
+推荐创建方式：
 
 ```python
-from src.item import candidate
+from src.item import Candidate, Item
 
-retrieved = candidate.from_dict({
-    "parent_asin": "B001...",
-    "title": "Black Lightweight Running Shoes",
-    "features": ["Lightweight", "Comfortable"],
-    "description": ["Road running shoes"],
-    "price": 79.99,
-    "categories": ["Shoes", "Running"],
-    "details": {"Material": "Mesh", "Color": "Black"},
-    "average_rating": 4.5,
-    "rating_number": 120,
-    "store": "Example Store",
-    "retrieval_score": 0.83,
+product = Item.from_dict(catalog_record)
+
+retrieved = Candidate(
+    item=product,
+    bm25_score=9.2,
+    dense_score=0.82,
+    retrieval_score=0.91,
+    retrieval_rank=1,
+)
+```
+
+也可以从嵌套字典创建：
+
+```python
+retrieved = Candidate.from_dict({
+    "item": {
+        "parent_asin": "B001...",
+        "title": "Black Lightweight Running Shoes",
+        "features": ["Lightweight", "Comfortable"],
+        "description": ["Road running shoes"],
+        "price": 79.99,
+        "categories": ["Shoes", "Running"],
+        "details": {"Material": "Mesh", "Color": "Black"},
+        "average_rating": 4.5,
+        "rating_number": 120,
+        "store": "Example Store",
+    },
+    "bm25_score": 9.2,
+    "dense_score": 0.82,
+    "retrieval_score": 0.91,
     "retrieval_rank": 1,
 })
 ```
 
-### 2.3 `reranked_candidate`
+访问商品字段：
 
-`reranked_candidate` 继承 `item`，是 Reranking 的单个输出。它保留 Retrieval
-信息，并添加模块 3A 的诊断信息。
+```python
+retrieved.item.parent_asin
+retrieved.item.title
+retrieved.retrieval_score
+```
 
-| 字段 | Python 类型 | 说明 |
+### 3.3 `RankedCandidate`
+
+`RankedCandidate` 是 Reranking 的单个输出。它同样组合 `Item`，保留 Retrieval
+诊断分数，并增加重排结果。
+
+| 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `retrieval_score` | `float \| None` | 原始 Retrieval 分数 |
-| `retrieval_rank` | `int \| None` | 原始 Retrieval 名次 |
-| `rank` | `int` | Reranking 后的新名次，从 1 开始 |
-| `score` | `float` | 当前 Reranking 综合分数，不是概率 |
-| `matched` | `list[str]` | 匹配到的约束/偏好属性名 |
+| `item` | `Item` | 与输入候选共享的商品对象 |
+| `bm25_score` | `float \| None` | 原始 BM25 分数 |
+| `dense_score` | `float \| None` | 原始 Dense 分数 |
+| `retrieval_score` | `float \| None` | 原始 Retrieval 融合分数 |
+| `retrieval_rank` | `int \| None` | Retrieval 原始名次 |
+| `rerank_score` | `float` | Reranking 综合分数，不是概率 |
+| `rerank_rank` | `int` | Reranking 后的新名次，从 1 开始 |
+| `matched` | `list[str]` | 匹配到的约束/偏好属性 |
 | `violation` | `list[str]` | 违反的硬约束及原因 |
 
 示例：
 
 ```python
-reranked_candidate(
-    parent_asin="B001...",
-    # 其余 item 字段省略
-    retrieval_score=0.83,
+RankedCandidate(
+    item=product,
+    bm25_score=9.2,
+    dense_score=0.82,
+    retrieval_score=0.91,
     retrieval_rank=2,
-    rank=1,
-    score=0.87,
+    rerank_score=0.87,
+    rerank_rank=1,
     matched=["category", "material", "budget", "color"],
     violation=[],
 )
 ```
 
-兼容属性 `matched_attributes` 和 `violations` 暂时映射到 `matched` 和
-`violation`，新代码应优先使用短名称。
+新代码应使用 `rerank_score` 和 `rerank_rank`。为方便旧代码迁移，当前还提供
+只读别名 `score`、`rank`、`matched_attributes` 和 `violations`。
 
-### 2.4 列表类型别名
+### 3.4 列表类型别名
 
 ```python
-from src.item import candidates_100, candidates_10
+from src.item import Candidates100, Candidates10
 
-candidates_100 = list[candidate]
-candidates_10 = list[reranked_candidate]
+Candidates100 = list[Candidate]
+Candidates10 = list[RankedCandidate]
 ```
 
-它们是类型别名，不是新的容器类。Reranking 在运行时只读取输入的前 100 个
-有效候选，并强制 `top_k` 位于 1 到 10 之间。
+兼容期仍导出旧的小写别名，但新代码统一使用 `Item`、`Candidate`、
+`RankedCandidate`、`Candidates100` 和 `Candidates10`。
 
-## 3. Reranking 期待的输入
+## 4. Reranking 输入
 
 入口：
 
@@ -179,23 +237,23 @@ candidates_10 = rerank(
 )
 ```
 
-### 3.1 `shopping_state`
+### 4.1 `shopping_state`
 
-真正的 `shopping_state` 类由模块 2 定义并维护。Reranking 不创建或修改它，
-只按以下结构读取属性：
+真正的 `shopping_state` 类由模块 2 定义和维护。Reranking 不创建、不修改它，
+只读取以下结构：
 
-| 字段 | 来源 | 说明 | 当前 Reranking 是否使用 |
+| 字段 | 来源 | 含义 | 当前是否用于排序 |
 | --- | --- | --- | --- |
-| `session_id` | 官方 `reset/respond` | 当前会话标识 | 否，只作为共享状态契约 |
-| `user_profile` | 官方 `reset` | 匿名聚合用户画像 | 是，读取 `preference_tags` |
-| `user_message` | 官方每次 `respond` | 当前用户消息 | 否，模块 2 应先将其解析为约束 |
-| `turn` | 官方每次 `respond` | 当前轮次 1～10 | 否，预留给动态策略 |
-| `intent` | 模块 2 推断 | 只能是 `buying` 或 `browsing` | 是，选择打分权重 |
+| `session_id` | 官方 `reset/respond` | 当前会话 ID | 否，只作为共享契约 |
+| `user_profile` | 官方 `reset` | 匿名聚合画像 | 是，读取 `preference_tags` |
+| `user_message` | 官方每轮 `respond` | 当前消息 | 否，模块 2 应先解析成约束 |
+| `turn` | 官方每轮 `respond` | 当前轮次 1～10 | 否，预留给动态策略 |
+| `intent` | 模块 2 推断 | `buying` 或 `browsing` | 是，选择权重 |
 | `hard_constraint` | 模块 2 提取 | 必须满足的属性和值 | 是 |
 | `soft_constraint` | 模块 2 提取 | 满足则加分的偏好 | 是 |
-| `no_prefernce` | 模块 2 提取 | 用户明确不关心的属性名 | 是，从排序条件中移除 |
+| `no_prefernce` | 模块 2 提取 | 用户明确不关心的属性名 | 是，排除对应条件 |
 
-示例对象的内容：
+示例：
 
 ```python
 shopping_state.session_id = "session-001"
@@ -223,68 +281,60 @@ shopping_state.soft_constraint = {
 shopping_state.no_prefernce = ["brand"]
 ```
 
-注意：当前团队接口使用的是 `no_prefernce` 这个拼写。Reranking 同时兼容
-`no_preference`，但各模块联调时应统一使用同一个字段名。
+注意：团队当前接口使用 `no_prefernce` 这个拼写。Reranking 也兼容
+`no_preference`，但联调时应统一字段名。
 
-`no_prefernce` 表示“不关心这个属性”，不是“拒绝某个值”：
+`no_prefernce=["brand"]` 表示品牌不影响排序，不表示拒绝某个品牌。
 
-```python
-shopping_state.no_prefernce = ["brand"]
-# 品牌不参与排序，也不会产生 brand:not_matched。
-```
+### 4.2 `candidates_100`
 
-如果未来模块 2 增加结构化拒绝值，可以额外提供兼容字段：
-
-```python
-shopping_state.rejected_values = {
-    "material": ["leather"],
-}
-```
-
-### 3.2 `candidates_100`
-
-标准输入是按 Retrieval 相关性从高到低排列的 `list[candidate]`：
+标准输入是按 Retrieval 相关性从高到低排列的 `list[Candidate]`：
 
 ```python
 candidates_100 = [
-    candidate(..., retrieval_score=0.95, retrieval_rank=1),
-    candidate(..., retrieval_score=0.88, retrieval_rank=2),
-    # 最多 100 个
+    Candidate(
+        item=product_a,
+        bm25_score=9.2,
+        dense_score=0.82,
+        retrieval_score=0.95,
+        retrieval_rank=1,
+    ),
+    Candidate(
+        item=product_b,
+        bm25_score=8.7,
+        dense_score=0.91,
+        retrieval_score=0.88,
+        retrieval_rank=2,
+    ),
 ]
 ```
 
 要求：
 
-- `parent_asin` 必须是非空且来自官方 catalog。
+- `Candidate.item.parent_asin` 必须非空并来自官方 catalog。
 - 同一个 `parent_asin` 不应重复。
 - `retrieval_score` 若提供，必须遵守“越高越好”。
-- 最好同时提供 `retrieval_rank`，便于分析重排前后的名次变化。
-- 迁移阶段仍兼容字典候选，但新代码应输出 `candidate` 对象。
+- 建议同时提供各分项分数和 `retrieval_rank`，方便调试和消融。
+- 最多传入 100 个候选；超过部分不会参与 Reranking。
+- 迁移阶段兼容旧的字典候选，新代码应输出 `Candidate` 对象。
 
-Reranking 会再次校验、去重；无效候选会被忽略。若缺少可比较的
-`retrieval_score`，占位实现会根据原始顺序生成递减分数。
+Reranking 会再次校验、去重。若没有可比较的 `retrieval_score`，占位实现会
+根据输入顺序生成递减分数，但不会回写或修改输入对象。
 
-## 4. 预期输出：`candidates_10`
+## 5. Reranking 输出
 
-标准输出是按新分数从高到低排列的 `list[reranked_candidate]`：
+标准输出是按 `rerank_score` 从高到低排列的 `list[RankedCandidate]`：
 
 ```python
 candidates_10 = [
-    reranked_candidate(
-        parent_asin="A-MESH",
-        title="Black Lightweight Mesh Running Shoes",
-        features=["Lightweight", "Comfortable"],
-        description=["Road running shoes"],
-        price=79.99,
-        categories=["Shoes", "Running"],
-        details={"Material": "Mesh", "Color": "Black"},
-        average_rating=4.5,
-        rating_number=420,
-        store="Example Store",
+    RankedCandidate(
+        item=product_b,
+        bm25_score=8.7,
+        dense_score=0.91,
         retrieval_score=0.88,
         retrieval_rank=2,
-        rank=1,
-        score=0.65,
+        rerank_score=0.65,
+        rerank_rank=1,
         matched=["category", "feature", "material", "budget", "color"],
         violation=[],
     ),
@@ -294,49 +344,68 @@ candidates_10 = [
 输出约束：
 
 - 最多 10 个对象。
-- `rank` 必须连续为 `1..len(candidates_10)`。
-- 顺序就是最终推荐顺序。
-- `matched` 和 `violation` 用于解释、调试及 Dialogue 决策。
-- `score` 只用于内部排序；它不是置信概率，官方评分也会忽略它。
-- Reranking 不修改传入的 `shopping_state` 或 `candidates_100`。
+- `rerank_rank` 连续为 `1..len(candidates_10)`。
+- 列表顺序就是最终推荐顺序。
+- `RankedCandidate.item` 复用输入中的 `Item`，不复制 catalog 实体。
+- `matched` 和 `violation` 可供解释、调试和 Dialogue 使用。
+- `rerank_score` 只用于内部排序，官方评分会忽略推荐项中的分数。
+- Reranking 不修改 `shopping_state` 或 `candidates_100`。
 
-需要打印或写入 JSON 时：
+转换为 JSON：
 
 ```python
 serializable = [value.to_dict() for value in candidates_10]
 ```
 
-### 转换成官方 Agent 输出
+得到嵌套结构：
+
+```python
+{
+    "item": {
+        "parent_asin": "B001...",
+        "title": "...",
+        # 其余 catalog 字段
+    },
+    "bm25_score": 8.7,
+    "dense_score": 0.91,
+    "retrieval_score": 0.88,
+    "retrieval_rank": 2,
+    "rerank_score": 0.65,
+    "rerank_rank": 1,
+    "matched": ["category", "material", "budget"],
+    "violation": [],
+}
+```
+
+### 转换成官方输出
 
 ```python
 recommendations = recommendations_from_ranking(candidates_10)
 ```
 
-得到：
+结果：
 
 ```python
 [
-    {"parent_asin": "A-MESH"},
-    {"parent_asin": "B-LEATHER"},
+    {"parent_asin": "B001..."},
+    {"parent_asin": "B002..."},
 ]
 ```
 
-转换函数会过滤空 ID 和重复 ID。官方只评分前 10 个有效唯一
-`parent_asin`；推荐项中的可选 `score` 即使提供也不会参与评分。
+转换函数从 `RankedCandidate.item.parent_asin` 读取 ID，并过滤空值和重复值。
+官方只评分前 10 个有效唯一 ID。
 
-## 5. 当前占位排序
-
-当前实现只用于跑通框架，不代表最终方案。
+## 6. 当前占位排序
 
 共同信号：
 
-- 归一化后的 Retrieval 分数。
+- 归一化 Retrieval 融合分数。
 - 硬约束匹配率。
 - 软约束匹配率。
 - `user_profile.preference_tags` 的词语匹配率。
 - 是否存在硬约束或明确拒绝值违规。
 
-`buying` 权重：
+`buying`：
 
 ```text
 0.55 * retrieval
@@ -346,7 +415,7 @@ recommendations = recommendations_from_ranking(candidates_10)
 - 0.80 * violation penalty
 ```
 
-`browsing` 权重：
+`browsing`：
 
 ```text
 0.70 * retrieval
@@ -356,61 +425,56 @@ recommendations = recommendations_from_ranking(candidates_10)
 - 0.75 * violation penalty
 ```
 
-普通属性当前使用英文 token 重合率；硬约束匹配率低于 `0.6` 时记录
-`<attribute>:not_matched`。预算支持 `min/max`、数值和简单英文区间。
-
-待优化项：
+普通属性暂时使用英文 token 重合率。预算支持 `min/max`、数字和简单英文区间。
+这只是占位实现，后续应重点优化：
 
 - 语义匹配、同义词和词形变化。
 - Cross-Encoder 或 Learning-to-Rank。
-- browsing 的 MMR/类目覆盖等真正多样性策略。
-- 按属性类型设计匹配器。
-- 更细粒度的违规严重度与可解释分项。
+- browsing 的 MMR/类目覆盖等多样性策略。
+- 不同属性的专用匹配器。
+- 更细粒度的违规严重度和可解释分项。
 - 使用 public sessions 调整权重并做消融实验。
 
-替换排序算法时，优先修改 `reranker.py` 中的 `_score_candidate()`，不要改变
-`shopping_state + candidates_100 -> candidates_10` 的公共边界。
+替换算法时优先修改 `reranker.py` 的 `_score_candidate()`，不要改变
+`shopping_state + candidates_100 -> candidates_10` 的边界。
 
-## 6. 与其他模块的责任边界
+## 7. 模块责任边界
 
-### 模块 1：Retrieval
+### Retrieval
 
-- 输入 query/state 中可检索的信息。
-- 从固定 catalog 召回最多 100 个商品。
-- 创建 `candidate` 对象并输出有序 `candidates_100`。
-- 保证 `retrieval_score` 越高越相关。
+- 从固定 catalog 召回最多 100 个 `Item`。
+- 计算 BM25、Dense 和融合分数。
+- 封装为 `Candidate` 并输出有序 `candidates_100`。
 
-### 模块 2：State
+### State
 
-- 在 `reset()` 时保存 `session_id` 和 `user_profile`。
+- 在 `reset()` 保存 `session_id` 和 `user_profile`。
 - 每轮更新 `user_message` 和 `turn`。
-- 从消息和历史推断 `intent`，官方不会直接提供 buying/browsing。
+- 从消息与历史推断 `intent`；官方不会直接传 buying/browsing。
 - 更新硬约束、软约束和无偏好属性。
-- 处理 intent override；Reranking 只读取更新后的结果。
 
-### 模块 3A：Reranking
+### Reranking
 
 - 不解析对话，不修改 `shopping_state`。
 - 清洗并去重 `candidates_100`。
 - 计算匹配、违规和综合分数。
 - 输出稳定、有序的 `candidates_10`。
 
-### 模块 3B：Dialogue
+### Dialogue
 
-- 读取 `candidates_10` 的商品属性和排序结果。
-- 判断是否需要追问以及应该询问哪个属性。
+- 读取 `RankedCandidate.item` 中的商品属性及排序诊断。
+- 判断是否追问以及询问哪个属性。
 - 不负责修改商品排名。
 
 ### Agent / Orchestrator
 
 - 管理 session 到 `shopping_state` 的映射。
 - 依次调用 State、Retrieval、Reranking、Dialogue。
-- 将 `candidates_10` 转换成官方 `recommendations`。
-- 返回 `message`、`ask_attribute` 和 `recommendations`。
+- 把 `candidates_10` 转换成官方 `recommendations`。
 
-## 7. 运行示例与测试
+## 8. 示例与测试
 
-在仓库根目录运行完整模拟：
+运行模拟：
 
 ```text
 python examples/reranker_demo.py
@@ -424,37 +488,35 @@ python -m unittest discover -v
 
 Reranking 测试覆盖：
 
-- `item` 是否与官方 catalog 字段一致。
-- `candidate` / `reranked_candidate` 的继承关系。
+- `Item` 是否与官方 catalog 字段一致。
+- `Candidate` / `RankedCandidate` 是否使用组合而不是继承。
+- `RankedCandidate.item` 是否复用原始 `Item`。
+- BM25、Dense、Retrieval 分数是否保留到输出。
 - 硬约束能否改变 Retrieval 原始顺序。
-- 输出是否为 `list[reranked_candidate]`。
-- `no_prefernce` 是否真正从排序中排除属性。
+- 输出是否为 `list[RankedCandidate]` 且名次连续。
+- `no_prefernce` 是否真正排除属性。
 - `intent` 是否只允许 buying/browsing。
-- 重复和无效候选是否被删除。
-- `top_k` 和官方格式转换是否正确。
+- 重复和无效候选是否被清理。
+- `top_k`、空输入和官方格式转换是否正确。
 - 输入对象是否保持不变。
-- 空候选是否安全返回空列表。
-- 是否禁止输出超过 10 个候选。
-- `candidates_10` 是否能被 Dialogue 模块读取。
+- `candidates_10` 是否能被 Dialogue 读取。
 
-## 8. 当前接口摘要
+## 9. 接口摘要
 
 ```python
-# Shared data classes
-from src.item import item, candidate, reranked_candidate
+from src.item import Item, Candidate, RankedCandidate
+from src.reranking import rerank, recommendations_from_ranking
 
-# Module 1 output
-candidates_100: list[candidate]
+# Module 1
+candidates_100: list[Candidate]
 
 # Module 3A
-from src.reranking import rerank
-candidates_10: list[reranked_candidate] = rerank(
+candidates_10: list[RankedCandidate] = rerank(
     shopping_state,
     candidates_100,
     top_k=10,
 )
 
-# Official output adapter
-from src.reranking import recommendations_from_ranking
+# Agent output
 recommendations = recommendations_from_ranking(candidates_10)
 ```

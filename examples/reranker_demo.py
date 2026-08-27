@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.item import candidate
+from src.item import Candidate
 from src.reranking import recommendations_from_ranking, rerank
 
 
@@ -56,10 +56,13 @@ SIMULATED_SHOPPING_STATE = SimulatedShoppingState(
     no_prefernce=["brand"],
 )
 
-SIMULATED_CANDIDATES_100 = [candidate.from_dict(value) for value in [
+SIMULATED_CANDIDATES_100 = [Candidate.from_dict(value) for value in [
     {
         "parent_asin": "B-LEATHER",
+        "bm25_score": 9.2,
+        "dense_score": 0.82,
         "retrieval_score": 0.95,
+        "retrieval_rank": 1,
         "product": {
             "title": "Black Leather Running Shoes",
             "categories": ["Shoes", "Athletic", "Running"],
@@ -74,7 +77,10 @@ SIMULATED_CANDIDATES_100 = [candidate.from_dict(value) for value in [
     },
     {
         "parent_asin": "A-MESH",
+        "bm25_score": 8.7,
+        "dense_score": 0.91,
         "retrieval_score": 0.88,
+        "retrieval_rank": 2,
         "product": {
             "title": "Black Lightweight Mesh Running Shoes",
             "categories": ["Shoes", "Athletic", "Running"],
@@ -89,7 +95,10 @@ SIMULATED_CANDIDATES_100 = [candidate.from_dict(value) for value in [
     },
     {
         "parent_asin": "C-WHITE",
+        "bm25_score": 6.1,
+        "dense_score": 0.65,
         "retrieval_score": 0.82,
+        "retrieval_rank": 3,
         "product": {
             "title": "White Canvas Casual Sneakers",
             "categories": ["Shoes", "Fashion Sneakers"],

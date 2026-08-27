@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeAlias
 
-from ..item import candidate, candidates_10, candidates_100, item, reranked_candidate
+from ..item import Candidate, Candidates10, Item, RankedCandidate
 
 
 ATTRIBUTE_ORDER = (
@@ -54,7 +54,7 @@ ShoppingStateInput: TypeAlias = ShoppingStateProtocol | Mapping[str, Any]
 @dataclass(frozen=True)
 class _PreparedCandidate:
     original_index: int
-    source: candidate
+    source: Candidate
     retrieval_score: float
 
     @property
@@ -63,7 +63,7 @@ class _PreparedCandidate:
 
     @property
     def product(self) -> dict[str, Any]:
-        return item.to_dict(self.source)
+        return self.source.item.to_dict()
 
 
 def _is_sequence(value: object) -> bool:
@@ -101,20 +101,20 @@ def _rank_fallback(index: int) -> float:
 
 
 def _prepare_candidates(
-    retrieval_candidates: Sequence[candidate | Mapping[str, Any]],
+    retrieval_candidates: Sequence[Candidate | Mapping[str, Any]],
 ) -> list[_PreparedCandidate]:
     """Validate, deduplicate, and normalize retrieval scores to the 0..1 range.
 
     The input contract defines ``retrieval_score`` as higher-is-better.  If module 1
     only has a rank, it can omit the score and preserve its candidate ordering.
     """
-    unique: list[tuple[int, candidate, float | None]] = []
+    unique: list[tuple[int, Candidate, float | None]] = []
     seen: set[str] = set()
     for index, value in enumerate(retrieval_candidates[:100]):
         if not isinstance(value, Mapping):
             continue
         try:
-            source = value if isinstance(value, candidate) else candidate.from_dict(value)
+            source = value if isinstance(value, Candidate) else Candidate.from_dict(value)
         except (TypeError, ValueError):
             continue
         if source.parent_asin in seen:
@@ -375,9 +375,9 @@ class SimpleReranker:
     def rerank(
         self,
         shopping_state: ShoppingStateInput,
-        candidates_100: Sequence[candidate | Mapping[str, Any]],
+        candidates_100: Sequence[Candidate | Mapping[str, Any]],
         top_k: int = 10,
-    ) -> candidates_10:
+    ) -> Candidates10:
         if not 1 <= top_k <= 10:
             raise ValueError("top_k must be between 1 and 10")
 
@@ -401,13 +401,13 @@ class SimpleReranker:
             scored.append((score, candidate, matched, violations))
 
         scored.sort(key=lambda row: (-row[0], row[1].original_index, row[1].parent_asin))
-        candidates_10: list[reranked_candidate] = []
+        candidates_10: list[RankedCandidate] = []
         for rank, (score, candidate, matched, violations) in enumerate(scored[:top_k], start=1):
             candidates_10.append(
-                reranked_candidate.from_candidate(
+                RankedCandidate.from_candidate(
                     candidate.source,
-                    rank=rank,
-                    score=round(score, 6),
+                    rerank_rank=rank,
+                    rerank_score=round(score, 6),
                     matched=matched,
                     violation=violations,
                 )
@@ -417,23 +417,28 @@ class SimpleReranker:
 
 def rerank(
     shopping_state: ShoppingStateInput,
-    candidates_100: Sequence[candidate | Mapping[str, Any]],
+    candidates_100: Sequence[Candidate | Mapping[str, Any]],
     top_k: int = 10,
-) -> candidates_10:
+) -> Candidates10:
     """Convenience function for callers that do not need a component instance."""
     return SimpleReranker().rerank(shopping_state, candidates_100, top_k)
 
 
 def recommendations_from_ranking(
-    candidates_10: Sequence[reranked_candidate | Mapping[str, Any]], top_k: int = 10
+    candidates_10: Sequence[RankedCandidate | Mapping[str, Any]], top_k: int = 10
 ) -> list[dict[str, str]]:
     """Convert `candidates_10` to the official recommendation shape."""
     recommendations: list[dict[str, str]] = []
     seen: set[str] = set()
     for ranked in candidates_10:
-        if not isinstance(ranked, Mapping):
+        if isinstance(ranked, RankedCandidate):
+            parent_asin = ranked.item.parent_asin
+        elif isinstance(ranked, Mapping):
+            nested = ranked.get("item")
+            nested_id = nested.get("parent_asin") if isinstance(nested, Mapping) else None
+            parent_asin = str(ranked.get("parent_asin") or nested_id or "").strip()
+        else:
             continue
-        parent_asin = str(ranked.get("parent_asin") or "").strip()
         if not parent_asin or parent_asin in seen:
             continue
         seen.add(parent_asin)
