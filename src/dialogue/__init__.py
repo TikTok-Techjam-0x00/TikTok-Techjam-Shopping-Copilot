@@ -1,7 +1,10 @@
 """Shopping copilot implementation modules."""
 
 from .three_b import (
+    AskDecision,
     AskAttributeSelector,
+    ShoppingStateInput,
+    ShoppingStateProtocol,
     build_question,
     choose_ask_attribute,
     decide_ask,
@@ -9,7 +12,10 @@ from .three_b import (
 )
 
 __all__ = [
+    "AskDecision",
     "AskAttributeSelector",
+    "ShoppingStateInput",
+    "ShoppingStateProtocol",
     "build_question",
     "choose_ask_attribute",
     "decide_ask",

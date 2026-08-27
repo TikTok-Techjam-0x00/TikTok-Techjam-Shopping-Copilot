@@ -1,7 +1,7 @@
 """3B: choose the next clarification attribute and render its question.
 
-3B is intentionally stateless. State is owned by module 2 and ranking results
-are owned by module 3; this module only reads both inputs.
+Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
+reads these inputs and never changes the product ranking produced by module 3A.
 """
 
 from __future__ import annotations
@@ -10,11 +10,16 @@ import math
 import re
 from collections import Counter
 from collections.abc import Mapping, MutableMapping, Sequence
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, TypedDict
+
+from ..item import Candidate
+
+if TYPE_CHECKING:
+    from ..attribute import AttributeMap, AttributeName
 
 
-# 一、属性定义与基础优先级。
-# 当 Ranking Result 缺少商品元数据时，系统会退回到这组稳定的默认顺序。
+# 属性定义与基础优先级。
+# 当 Retrieval candidates 缺少商品元数据时，系统会退回到这组稳定的默认顺序。
 ATTRIBUTES = (
     "category", "use_case", "feature", "size", "material",
     "budget", "style", "color", "brand", "other",
@@ -44,7 +49,7 @@ PROFILE_TAG_TO_ATTRIBUTE = {
     "brand": "brand", "color": "color", "colour": "color",
 }
 
-# Ranking Result 不一定有结构化属性；正则用于从标题、详情等文本中做兜底提取。
+# Retrieval candidate 不一定有结构化属性；正则用于从标题、详情等文本中兜底提取。
 VALUE_PATTERNS = {
     "material": re.compile(
         r"\b(cotton|polyester|nylon|leather|wool|spandex|silk|rayon|linen|suede|denim)\b", re.I
@@ -63,79 +68,129 @@ class AskDecision(TypedDict):
     message: str
 
 
+class ShoppingStateProtocol(Protocol):
+    """Module 2 正式 shopping_state 的结构接口。"""
+
+    session_id: str
+    user_profile: Mapping[str, Any]
+    user_message: str
+    turn: int
+    intent: Literal["buying", "browsing"]
+    hard_constraint: AttributeMap
+    soft_constraint: AttributeMap
+    no_prefernce: Sequence[AttributeName]
+    asked_attributes: Any
+
+
+ShoppingStateInput: TypeAlias = ShoppingStateProtocol | Mapping[str, Any]
+
+
+def _state_value(
+    shopping_state: ShoppingStateInput,
+    field: str,
+    default: Any = None,
+) -> Any:
+    """统一读取对象 State 和字典 State，保持与 3A 相同的访问方式。"""
+    if isinstance(shopping_state, Mapping):
+        return shopping_state.get(field, default)
+    return getattr(shopping_state, field, default)
+
+
 def _is_value(value: object) -> bool:
-    return value not in (None, "", [], {}, ())
+    """AttributeValue 等结构化对象只要存在，就代表用户表达过该属性。"""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (Mapping, Sequence)):
+        return bool(value)
+    return True
+
+
+def _attribute_name(value: object) -> str | None:
+    """把字符串或 AttributeName 统一成官方 ask_attribute 名称。"""
+    raw_value = getattr(value, "value", value)
+    name = str(raw_value).strip().lower()
+    if name == "others":
+        name = "other"
+    return name if name in ATTRIBUTES else None
 
 
 def _as_names(value: object) -> set[str]:
-    """兼容 ["size"] 和 [{"ask_attribute": "size"}] 两种列表格式。"""
+    """读取属性名称列表，也兼容 AttributeName 和 Mapping keys。"""
     names: set[str] = set()
     if isinstance(value, str):
         value = [value]
+    elif isinstance(value, Mapping):
+        value = list(value.keys())
     if not isinstance(value, Sequence):
         return names
     for item in value:
-        name = item.get("ask_attribute") if isinstance(item, Mapping) else item
-        if isinstance(name, str) and name in ATTRIBUTES:
+        raw_name = item.get("ask_attribute") if isinstance(item, Mapping) else item
+        name = _attribute_name(raw_name)
+        if name:
             names.add(name)
     return names
 
 
-def _known_attributes(state: Mapping[str, Any]) -> set[str]:
-    """读取模块 2 已经确认的属性，兼容字典和列表两种 State 格式。"""
+def _known_attributes(shopping_state: ShoppingStateInput) -> set[str]:
+    """读取 Module 2 已确认的 hard_constraint 和 soft_constraint。"""
     known: set[str] = set()
-    for field in ("known_attributes", "constraints", "preferences", "slots", "attributes"):
-        values = state.get(field)
-        # 例如 {"known_attributes": ["category", "color"]}。
-        known |= _as_names(values)
-        # 例如 {"known_attributes": {"category": "shoes"}}。
-        if isinstance(values, Mapping):
-            for name, value in values.items():
-                if name in ATTRIBUTES and _is_value(value):
+    for field in ("hard_constraint", "soft_constraint"):
+        constraints = _state_value(shopping_state, field)
+        if isinstance(constraints, Mapping):
+            for raw_name, value in constraints.items():
+                name = _attribute_name(raw_name)
+                if name and _is_value(value):
                     known.add(name)
-    for name in ATTRIBUTES:
-        if _is_value(state.get(name)):
-            known.add(name)
     return known
 
 
-def _asked_attributes(state: Mapping[str, Any]) -> set[str]:
+def _asked_attributes(shopping_state: ShoppingStateInput) -> set[str]:
     """读取历史提问，防止同一属性在后续轮次被重复询问。"""
-    asked: set[str] = set()
-    for field in ("asked_attributes", "question_history", "asked"):
-        asked |= _as_names(state.get(field))
-    return asked
+    return _as_names(_state_value(shopping_state, "asked_attributes"))
 
 
-def _unavailable_attributes(state: Mapping[str, Any]) -> set[str]:
-    """读取用户明确表示无偏好或拒绝回答的属性。"""
+def _unavailable_attributes(shopping_state: ShoppingStateInput) -> set[str]:
+    """读取用户不关心的属性；不要与 rejected_values 中的具体值混用。"""
     unavailable: set[str] = set()
-    for field in ("unavailable_attributes", "no_preference_attributes", "rejected_attributes"):
-        unavailable |= _as_names(state.get(field))
+    # no_prefernce 是正式字段；低成本保留正确拼写以便迁移。
+    for field in ("no_prefernce", "no_preference"):
+        unavailable |= _as_names(_state_value(shopping_state, field))
     return unavailable
 
 
-def _ranking_items(ranking_result: object) -> list[Mapping[str, Any]]:
-    """二、读取模块 3 的 Top 10，兼容常见的外层字段名称。"""
-    if isinstance(ranking_result, Mapping):
-        for field in ("results", "candidates", "items", "ranked_products", "recommendations"):
-            value = ranking_result.get(field)
-            if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-                return [item for item in value if isinstance(item, Mapping)][:10]
-        return []
-    if isinstance(ranking_result, Sequence) and not isinstance(ranking_result, (str, bytes)):
-        return [item for item in ranking_result if isinstance(item, Mapping)][:10]
-    return []
+def _retrieval_items(
+    candidates_100: Sequence[Candidate | Mapping[str, Any]],
+) -> list[Candidate | Mapping[str, Any]]:
+    """读取 Module 1 Retrieval 的前 100 个候选，用于 clarification analysis。
+
+    正式路径显式接受具有 ``Candidate.item`` 的对象；单个 Mapping 候选仅作为
+    数据迁移和测试兼容。这里不读取 Module 3A 的 ``candidates_10``。
+    """
+    accepted: list[Candidate | Mapping[str, Any]] = []
+    for value in candidates_100[:100]:
+        if isinstance(value, (Candidate, Mapping)):
+            accepted.append(value)
+    return accepted
 
 
-def _product(candidate: Mapping[str, Any]) -> dict[str, Any]:
-    """商品属性可以直接放在候选项里，也可以嵌套在常见的元数据字段中。"""
-    result = dict(candidate)
-    for field in ("product", "item", "metadata"):
-        nested = candidate.get(field)
-        if isinstance(nested, Mapping):
-            result.update(nested)
-    return result
+def _product(value: Candidate | Mapping[str, Any]) -> dict[str, Any] | None:
+    """把正式 Candidate.item 或兼容 Mapping 统一成商品字典。"""
+    if isinstance(value, Candidate):
+        return value.item.to_dict()
+
+    if not isinstance(value, Mapping):
+        return None
+    nested_item = value.get("item")
+    nested_to_dict = getattr(nested_item, "to_dict", None)
+    if callable(nested_to_dict):
+        product = nested_to_dict()
+        return dict(product) if isinstance(product, Mapping) else None
+    if isinstance(nested_item, Mapping):
+        return dict(nested_item)
+    # 兼容直接使用 catalog 商品字段的旧字典候选。
+    return dict(value)
 
 
 def _text(value: object) -> str:
@@ -146,17 +201,42 @@ def _text(value: object) -> str:
     return "" if value is None else str(value)
 
 
+def _detail_value(product: Mapping[str, Any], attribute: str) -> object:
+    """大小写不敏感地读取 details，例如 Material、material、use_case。"""
+    details = product.get("details")
+    if not isinstance(details, Mapping):
+        return None
+    wanted = attribute.casefold().replace("_", " ")
+    for key, value in details.items():
+        normalized_key = str(key).casefold().replace("_", " ")
+        if normalized_key == wanted:
+            return value
+    return None
+
+
+def _first_value(*values: object) -> object:
+    """按数据契约规定的优先级返回第一个有效属性值。"""
+    for value in values:
+        if _is_value(value):
+            return value
+    return None
+
+
 def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
-    """三、提取候选属性值；这些值只用于判断候选多样性和生成选项。"""
-    explicit = product.get(attribute)
-    if attribute == "brand" and not _is_value(explicit):
-        explicit = product.get("store")
-    if attribute == "category" and not _is_value(explicit):
-        explicit = product.get("categories")
-    if attribute == "feature" and not _is_value(explicit):
-        explicit = product.get("features")
-    if attribute == "budget" and not _is_value(explicit):
-        explicit = product.get("price")
+    """提取候选属性值；这些值只用于判断候选多样性和生成选项。"""
+    # 先读取统一 item 顶层字段，再读取 details；固定正则只作为最后兜底。
+    detail = _detail_value(product, attribute)
+    if attribute == "brand":
+        # store 只是店铺或品牌相关文本，优先级必须低于明确的 Brand。
+        explicit = _first_value(product.get("brand"), detail, product.get("store"))
+    elif attribute == "category":
+        explicit = _first_value(product.get("category"), product.get("categories"), detail)
+    elif attribute == "feature":
+        explicit = _first_value(product.get("feature"), product.get("features"), detail)
+    elif attribute == "budget":
+        explicit = _first_value(product.get("budget"), product.get("price"), detail)
+    else:
+        explicit = _first_value(product.get(attribute), detail)
 
     # 连续价格不适合直接作为问题选项，因此先转换成有限的价格区间。
     if attribute == "budget" and _is_value(explicit):
@@ -188,17 +268,20 @@ def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
 
 
 def _candidate_diversity_signal(
-    items: list[Mapping[str, Any]], attribute: str
+    items: list[Candidate | Mapping[str, Any]], attribute: str
 ) -> tuple[float, list[str]]:
     """计算候选多样性启发分，而非严格的信息增益。"""
     if len(items) < 2:
         return 0.0, []
 
-    # 排名靠前的商品权重更高，避免第十名候选过度影响提问方向。
+    # 排名靠前的商品权重更高，避免排名靠后的候选过度影响提问方向。
     weighted_counts: Counter[str] = Counter()
     covered = 0
     for rank, candidate in enumerate(items, start=1):
-        values = _values(_product(candidate), attribute)
+        product = _product(candidate)
+        if product is None:
+            continue
+        values = _values(product, attribute)
         if not values:
             continue
         covered += 1
@@ -222,9 +305,9 @@ def _candidate_diversity_signal(
     return boost, options
 
 
-def _profile_boosts(state: Mapping[str, Any]) -> Counter[str]:
-    """四、将用户画像标签转换成较小的属性优先级增量。"""
-    profile = state.get("user_profile")
+def _profile_boosts(shopping_state: ShoppingStateInput) -> Counter[str]:
+    """将用户画像标签转换成较小的属性优先级增量。"""
+    profile = _state_value(shopping_state, "user_profile")
     tags = profile.get("preference_tags", []) if isinstance(profile, Mapping) else []
     boosts: Counter[str] = Counter()
     if not isinstance(tags, Sequence) or isinstance(tags, (str, bytes)):
@@ -236,9 +319,9 @@ def _profile_boosts(state: Mapping[str, Any]) -> Counter[str]:
     return boosts
 
 
-def _turn_number(state: Mapping[str, Any]) -> int:
+def _turn_number(shopping_state: ShoppingStateInput) -> int:
     """安全读取轮次；非法值回退到第一轮，不让 3B 中断整个会话。"""
-    raw_turn = state.get("turn") or state.get("current_turn") or 1
+    raw_turn = _state_value(shopping_state, "turn", 1)
     try:
         turn = int(raw_turn)
     except (TypeError, ValueError):
@@ -247,17 +330,21 @@ def _turn_number(state: Mapping[str, Any]) -> int:
 
 
 def choose_ask_attribute(
-    state: Mapping[str, Any],
-    ranking_result: object,
+    shopping_state: ShoppingStateInput,
+    candidates_100: Sequence[Candidate | Mapping[str, Any]],
 ) -> tuple[str | None, list[str]]:
-    """五、综合 State 覆盖情况与候选多样性，选择一个尚未问过的属性。"""
-    turn = _turn_number(state)
+    """综合 State 覆盖情况与候选多样性，选择一个尚未问过的属性。"""
+    turn = _turn_number(shopping_state)
     if turn >= 10:
         return None, []
 
-    excluded = _known_attributes(state) | _asked_attributes(state) | _unavailable_attributes(state)
-    items = _ranking_items(ranking_result)
-    profile_boosts = _profile_boosts(state)
+    excluded = (
+        _known_attributes(shopping_state)
+        | _asked_attributes(shopping_state)
+        | _unavailable_attributes(shopping_state)
+    )
+    items = _retrieval_items(candidates_100)
+    profile_boosts = _profile_boosts(shopping_state)
 
     # 类别是基础约束：模块 2 尚未确认类别时，先不比较更细的商品属性。
     if "category" not in excluded:
@@ -284,7 +371,7 @@ def choose_ask_attribute(
 
 
 def build_question(attribute: str | None, options: Sequence[str] = ()) -> str:
-    """六、使用固定模板生成问题，并尽量展示 Ranking Result 中的主要候选值。"""
+    """使用固定模板生成问题，并尽量展示 Retrieval 中的主要候选值。"""
     useful_options = [str(value) for value in options[:3] if value]
     if len(useful_options) == 1:
         choices = useful_options[0]
@@ -316,30 +403,44 @@ def build_question(attribute: str | None, options: Sequence[str] = ()) -> str:
     return ""
 
 
-def decide_ask(state: Mapping[str, Any], ranking_result: object) -> AskDecision:
-    """3B 主入口；只读取 State，不会自动修改模块 2 的状态。"""
-    attribute, options = choose_ask_attribute(state, ranking_result)
+def decide_ask(
+    shopping_state: ShoppingStateInput,
+    candidates_100: Sequence[Candidate | Mapping[str, Any]],
+) -> AskDecision:
+    """3B 主入口；读取 Module 2 State 和 Module 1 Retrieval candidates。"""
+    attribute, options = choose_ask_attribute(shopping_state, candidates_100)
     return {"ask_attribute": attribute, "message": build_question(attribute, options)}
 
 
 def record_asked_attribute(
-    state: MutableMapping[str, Any], attribute: str | None
+    shopping_state: ShoppingStateInput, attribute: str | None
 ) -> None:
-    """七、供调用方显式把本轮提问写回模块 2 的可变 State。
+    """供调用方显式把本轮提问写回模块 2 的可变 State。
 
     ``decide_ask`` 保持无状态和只读；主流程得到决策后应调用本函数，
     否则下一轮 3B 无法知道该属性已经问过。
     """
     if attribute is None or attribute not in ATTRIBUTES:
         return
-    asked = _asked_attributes(state)
+    asked = _asked_attributes(shopping_state)
     asked.add(attribute)
     # 统一写回列表，便于 JSON 序列化和模块之间传递。
-    state["asked_attributes"] = sorted(asked, key=ATTRIBUTES.index)
+    updated = sorted(asked, key=ATTRIBUTES.index)
+    if isinstance(shopping_state, MutableMapping):
+        shopping_state["asked_attributes"] = updated
+        return
+    try:
+        setattr(shopping_state, "asked_attributes", updated)
+    except (AttributeError, TypeError) as error:
+        raise TypeError("shopping_state must allow asked_attributes to be updated") from error
 
 
 class AskAttributeSelector:
     """为使用组件类的主流程提供一个很薄的对象封装。"""
 
-    def decide(self, state: Mapping[str, Any], ranking_result: object) -> AskDecision:
-        return decide_ask(state, ranking_result)
+    def decide(
+        self,
+        shopping_state: ShoppingStateInput,
+        candidates_100: Sequence[Candidate | Mapping[str, Any]],
+    ) -> AskDecision:
+        return decide_ask(shopping_state, candidates_100)

@@ -1,38 +1,366 @@
-# 3B — Ask Attribute
+# Dialogue Clarification（Module 3B）
 
-3B has one responsibility: decide what to ask next.
+本目录负责根据 Module 2 的 `shopping_state` 和 Module 1 Retrieval 返回的最多
+100 个 `Candidate`，判断是否需要继续 clarification、选择 `ask_attribute`，并用
+确定性模板生成面向用户的 `message`。
+
+3B 不修改商品顺序，也不依赖 3A 的具体排序公式。当前 clarification policy 是
+可运行的启发式基线，后续可以优化属性价值估计而不改变模块输入输出边界。
+
+## 1. 数据流
+
+```text
+Official evaluator
+  reset(session_id, user_profile)
+  respond(session_id, user_message, turn, top_k)
+                 |
+                 v
+Module 2: shopping_state
+                 |
+                 +----------------------------+
+                 |                            |
+                 v                            v
+Module 1: Retrieval                     Module 3B: Dialogue
+output candidates_100  ---------------> shopping_state + candidates_100
+                 |                            |
+                 v                            v
+Module 3A: Reranking                   ask_attribute + message
+output candidates_10
+                 |
+                 v
+Official recommendations
+```
+
+主要文件：
+
+- `src/item.py`：跨模块共享的 `Item`、`Candidate`、`RankedCandidate`。
+- `src/attribute.py`：Module 2 hard/soft constraint 使用的属性契约。
+- `src/dialogue/three_b.py`：clarification 属性选择和问题生成。
+- `src/dialogue/test_three_b.py`：3B 接口与行为测试。
+
+推荐导入：
 
 ```python
 from src.dialogue import decide_ask, record_asked_attribute
-
-decision = decide_ask(state_from_module_2, ranking_result_from_module_3)
-# {"ask_attribute": "material", "message": "Which material do you prefer: ...?"}
-
-# 3B 本身无状态，所以主流程需要把本轮提问交还给模块 2 保存。
-record_asked_attribute(state_from_module_2, decision["ask_attribute"])
+from src.item import Candidate, Item
 ```
 
-## Inputs
+## 2. 为什么直接读取 Candidate.item
 
-- `state`: module 2's current state. `known_attributes` supports both
-  `{"category": "shoes"}` and `["category", "color"]`. 3B also reads asked,
-  unavailable/no-preference attributes, turn number, and optional profile tags.
-- `ranking_result`: module 3's ranked candidates. Candidate metadata may be inline
-  or nested under `product`, `item`, or `metadata`.
+最新版共享模型使用组合关系：
 
-`decide_ask` never changes either input and stores no session state. After each
-decision, the caller must record `ask_attribute` in module 2. The optional
-`record_asked_attribute` helper performs this explicit write for mutable states.
+```text
+Candidate.item ---------> Item
+RankedCandidate.item ---> Item
+```
 
-## Decision policy
+`Candidate` 保存 Retrieval 阶段信息，`Item` 保存 catalog 商品字段。3B 的正式
+商品读取路径是：
 
-1. Exclude attributes already known, already asked, or marked no-preference.
-2. Use entropy, metadata coverage, and value count to estimate which attribute best
-   separates the Top 10. This is a candidate-diversity heuristic, not strict
-   information gain based on simulated user answers and reranking.
-3. Combine that diversity signal with turn stage and profile relevance.
-4. Return one official `ask_attribute` and a deterministic question template.
+```text
+Candidate
+    ↓
+Candidate.item
+    ↓
+Item.to_dict()
+    ↓
+统一 product dict
+    ↓
+属性分布分析
+```
 
-The input readers accept a few common field aliases until modules 2 and 3 finalize
-their contracts. Once fixed, the aliases can be replaced with exact TypedDicts
-without changing the policy.
+这使 3B 不依赖 `Candidate` 是否实现 Mapping，也不会把 Retrieval 分数混入商品
+元数据。迁移阶段仍兼容嵌套 `item` 的 Mapping 和直接 catalog Mapping，但它们
+不是正式数据路径。
+
+## 3. 输入契约
+
+公开入口：
+
+```python
+decision = decide_ask(
+    shopping_state=shopping_state,
+    candidates_100=candidates_100,
+)
+```
+
+### 3.1 shopping_state
+
+State 由 Module 2 创建和维护。3B 同时支持对象属性和普通 Mapping：
+
+| 字段 | 含义 | 3B 用途 |
+| --- | --- | --- |
+| `session_id` | 当前会话 ID | 共享契约，不参与当前评分 |
+| `user_profile` | 匿名聚合画像 | 对相关属性提供小幅 priority boost |
+| `user_message` | 当前用户消息 | Module 2 应先解析为约束 |
+| `turn` | 当前轮次 1～10 | 控制轮次策略和停止追问 |
+| `intent` | `buying` 或 `browsing` | 共享契约，当前 3B 不直接使用 |
+| `hard_constraint` | 用户硬约束 | 其中的属性不会再次询问 |
+| `soft_constraint` | 用户软偏好 | 其中的属性不会再次询问 |
+| `no_prefernce` | 用户不关心的属性 | 对应属性不会询问 |
+| `asked_attributes` | 历史已问属性 | 防止重复 clarification |
+
+`hard_constraint` 和 `soft_constraint` 可以使用团队的 `AttributeMap`：
+
+```python
+shopping_state.hard_constraint = {
+    "category": AttributeValue(values=["running shoes"]),
+    "budget": AttributeValue(maximum=100, unit="USD"),
+}
+shopping_state.soft_constraint = {
+    "color": AttributeValue(values=["black"]),
+}
+shopping_state.no_prefernce = [AttributeName.BRAND]
+shopping_state.asked_attributes = ["material"]
+```
+
+3B 当前只需要判断 constraint value 是否存在，不解析 `AttributeValue` 的具体
+语义。`no_prefernce` 是团队正式拼写；低成本保留 `no_preference` 兼容拼写。
+`rejected_values={"material": ["leather"]}` 表示拒绝一个具体值，不等于用户不
+关心整个 material 属性，因此不会被当成 no preference。
+
+### 3.2 candidates_100
+
+正式输入是 Module 1 按 Retrieval 顺序输出的 `list[Candidate]`：
+
+```python
+product = Item.from_dict(catalog_record)
+
+retrieved = Candidate(
+    item=product,
+    bm25_score=9.2,
+    dense_score=0.82,
+    retrieval_score=0.91,
+    retrieval_rank=1,
+)
+
+candidates_100 = [retrieved]
+```
+
+3B 最多读取列表前 100 个候选。当前算法只使用列表顺序作为相对 rank，不依赖
+`retrieval_score` 的绝对阈值，也不要求 BM25/Dense 分数存在。
+
+保留的 Mapping 兼容形式：
+
+```python
+mapping_candidate = {
+    "item": {
+        "parent_asin": "B001...",
+        "title": "Black Running Shoes",
+        "features": ["Lightweight"],
+        "description": [],
+        "price": 79.99,
+        "categories": ["Shoes", "Running"],
+        "details": {"Material": "Mesh", "Color": "Black"},
+        "average_rating": 4.5,
+        "rating_number": 120,
+        "store": "Example Store",
+    },
+    "retrieval_rank": 1,
+}
+```
+
+旧的 `ranking_result/results/ranked_products/recommendations` 外层包装不再属于
+3B 正式接口。
+
+## 4. 输出
+
+`decide_ask()` 返回：
+
+```python
+{
+    "ask_attribute": "material",
+    "message": "Which material do you prefer: mesh or leather?",
+}
+```
+
+`ask_attribute` 为官方允许的 clarification 属性或 `None`。第 10 轮不继续追问：
+
+```python
+{
+    "ask_attribute": None,
+    "message": "",
+}
+```
+
+3B 本身无状态。Agent 得到决定后，必须让 Module 2 持久化本轮属性：
+
+```python
+record_asked_attribute(shopping_state, decision["ask_attribute"])
+```
+
+该 helper 支持可变 Mapping 和可写属性对象，并统一写回 `asked_attributes` 列表。
+
+## 5. Clarification policy
+
+### 5.1 排除不能再问的属性
+
+```text
+excluded
+  = hard_constraint.keys()
+  + soft_constraint.keys()
+  + asked_attributes
+  + no_prefernce
+```
+
+如果 category 尚未出现，3B 优先确认 category。其他属性再根据候选区分度、画像
+和轮次策略评分。
+
+### 5.2 商品属性提取
+
+`_product()` 统一解包 Candidate；`_values()` 按以下顺序提取属性：
+
+```text
+明确的 Item 顶层字段
+        ↓
+Item.details（key 大小写不敏感）
+        ↓
+categories / features / price / store 等结构化字段
+        ↓
+title / features / description / categories / details 文本
+        ↓
+有限正则 fallback
+```
+
+例如以下 details 无需出现在正则词典中即可识别：
+
+```python
+{
+    "Material": "Stainless Steel",
+    "Color": "Silver",
+    "Brand": "Acme",
+}
+```
+
+Brand 优先级为：
+
+```text
+明确 brand → details["Brand"] → store → 文本 fallback
+```
+
+### 5.3 候选多样性
+
+对每个尚未排除的属性，当前策略计算：
+
+- rank weighting：`1 / sqrt(rank)`，排名靠前的 Candidate 权重更高。
+- coverage：具有该属性值的候选占比。
+- normalized entropy：候选值分布的分散程度。
+- cardinality factor：对过多且零散的候选值降权。
+- profile boost：画像标签只提供小幅增量，不被视为显式约束。
+- turn policy：前期偏向明确意图，后期偏向具体商品属性。
+
+这是候选多样性启发式，不是模拟用户回答并重新 Retrieval 后的严格信息增益。
+现有权重保持 deterministic，3B 不读取 `rerank_score` 或 Retrieval score 阈值。
+
+### 5.4 问题生成
+
+问题通过固定 if 模板生成，不调用 LLM。存在稳定候选值时会把最多三个主要选项
+加入问题，例如：
+
+```text
+What size or fit do you need: small, medium, or large?
+```
+
+## 6. 与其他模块的责任边界
+
+### Module 1：Retrieval
+
+- 从 catalog 召回最多 100 个 `Item`。
+- 封装并输出有序的 `candidates_100: list[Candidate]`。
+- 同一份 candidates 分别传给 3A 和 3B。
+
+### Module 2：State
+
+- 保存 session、画像、消息和轮次。
+- 更新 hard/soft constraints、no preference 和 asked attributes。
+- 处理 intent override；3B 只读取更新后的状态。
+
+### Module 3A：Reranking
+
+- 输入 `shopping_state + candidates_100`。
+- 输出最多 10 个 `RankedCandidate` 用于最终 recommendations。
+- 可以替换 scorer，而不改变 3B clarification policy。
+
+### Module 3B：Dialogue
+
+- 输入 `shopping_state + candidates_100`。
+- 判断是否追问、询问哪个属性、如何表达问题。
+- 不读取 `candidates_10`，不修改排名，不生成 recommendations。
+
+### Agent / Orchestrator
+
+- 调用 State、Retrieval、Reranking 和 Dialogue。
+- 把 3A 的 `candidates_10` 转换成官方 recommendations。
+- 保存 3B 本轮的 `asked_attributes`。
+- 合并 `message`、`ask_attribute`、`recommendations` 和 `usage`。
+
+## 7. 最小联调示例
+
+```python
+from src.dialogue import decide_ask, record_asked_attribute
+from src.reranking import recommendations_from_ranking, rerank
+
+# Module 1
+candidates_100 = retrieval.search(
+    shopping_state.user_message,
+    top_k=100,
+)
+
+# Module 3A：只负责最终推荐排序
+candidates_10 = rerank(
+    shopping_state,
+    candidates_100,
+    top_k=10,
+)
+
+# Module 3B：直接分析 Module 1 Candidate，不把 3A Top 10 当成 Top 100
+decision = decide_ask(
+    shopping_state,
+    candidates_100,
+)
+record_asked_attribute(shopping_state, decision["ask_attribute"])
+
+response = {
+    **decision,
+    "recommendations": recommendations_from_ranking(candidates_10),
+    "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+}
+```
+
+## 8. 测试
+
+运行 3B 测试：
+
+```text
+python -m unittest src.dialogue.test_three_b -v
+```
+
+测试覆盖：
+
+- 非 Mapping `Candidate.item.to_dict()` 正式路径。
+- 嵌套 item Mapping 和直接 catalog Mapping 兼容。
+- Top 100 截断以及第 11～100 名对多样性计算的影响。
+- hard/soft constraint、`AttributeValue`、no preference 和 asked attributes。
+- dict State 与 object State。
+- details 的 Material、Color、Brand 及文本 fallback。
+- 空候选、缺少所有分数字段和 turn >= 10。
+- 原有 entropy、coverage、cardinality 和问题模板行为。
+
+## 9. 接口摘要
+
+```python
+from src.dialogue import decide_ask, record_asked_attribute
+from src.item import Candidate
+
+# Module 1 output
+candidates_100: list[Candidate]
+
+# Module 3B
+decision = decide_ask(
+    shopping_state=shopping_state,
+    candidates_100=candidates_100,
+)
+
+# Module 2 / Agent persistence
+record_asked_attribute(shopping_state, decision["ask_attribute"])
+```
