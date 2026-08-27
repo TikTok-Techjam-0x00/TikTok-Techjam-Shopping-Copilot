@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.attribute import AttributeMap, AttributeName, normalize_attribute_map
 from src.item import Candidate
 from src.reranking import recommendations_from_ranking, rerank
 
@@ -25,9 +26,9 @@ class SimulatedShoppingState:
     user_message: str
     turn: int
     intent: str
-    hard_constraint: dict[str, Any]
-    soft_constraint: dict[str, Any]
-    no_prefernce: list[str]
+    hard_constraint: AttributeMap
+    soft_constraint: AttributeMap
+    no_prefernce: list[AttributeName]
 
 
 SIMULATED_PROFILE = {
@@ -44,16 +45,16 @@ SIMULATED_SHOPPING_STATE = SimulatedShoppingState(
     user_message="I want black lightweight running shoes under $100.",
     turn=2,
     intent="buying",
-    hard_constraint={
+    hard_constraint=normalize_attribute_map({
         "category": "running shoes",
         "budget": {"max": 100},
         "material": "mesh",
-    },
-    soft_constraint={
+    }),
+    soft_constraint=normalize_attribute_map({
         "color": "black",
         "feature": ["lightweight", "comfortable"],
-    },
-    no_prefernce=["brand"],
+    }),
+    no_prefernce=[AttributeName.BRAND],
 )
 
 SIMULATED_CANDIDATES_100 = [Candidate.from_dict(value) for value in [

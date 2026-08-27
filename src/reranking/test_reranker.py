@@ -5,6 +5,7 @@ import unittest
 from dataclasses import dataclass
 from typing import Any
 
+from src.attribute import AttributeMap, AttributeName, normalize_attribute_map
 from src.item import DATASET_FIELDS, Candidate, Item, RankedCandidate
 from src.reranking import recommendations_from_ranking, rerank
 from src.dialogue import decide_ask
@@ -19,9 +20,9 @@ class MockShoppingState:
     user_message: str
     turn: int
     intent: str
-    hard_constraint: dict[str, Any]
-    soft_constraint: dict[str, Any]
-    no_prefernce: list[str]
+    hard_constraint: AttributeMap
+    soft_constraint: AttributeMap
+    no_prefernce: list[AttributeName]
 
 
 PROFILE = {"preference_tags": ["comfort", "durability"]}
@@ -32,16 +33,16 @@ SHOPPING_STATE = MockShoppingState(
     user_message="I want black lightweight running shoes under $100.",
     turn=2,
     intent="buying",
-    hard_constraint={
+    hard_constraint=normalize_attribute_map({
         "category": "running shoes",
         "budget": {"max": 100},
         "material": "mesh",
-    },
-    soft_constraint={
+    }),
+    soft_constraint=normalize_attribute_map({
         "color": "black",
         "feature": ["lightweight", "comfortable"],
-    },
-    no_prefernce=["brand"],
+    }),
+    no_prefernce=[AttributeName.BRAND],
 )
 
 CANDIDATES_100 = [
@@ -143,9 +144,11 @@ class SimpleRerankerTest(unittest.TestCase):
             user_message="Show me some running shoes.",
             turn=1,
             intent="browsing",
-            hard_constraint={"brand": "a brand that does not exist"},
+            hard_constraint=normalize_attribute_map(
+                {"brand": "a brand that does not exist"}
+            ),
             soft_constraint={},
-            no_prefernce=["brand"],
+            no_prefernce=[AttributeName.BRAND],
         )
         candidates_10 = rerank(shopping_state, CANDIDATES_100)
         self.assertTrue(all("brand:not_matched" not in value.violation for value in candidates_10))

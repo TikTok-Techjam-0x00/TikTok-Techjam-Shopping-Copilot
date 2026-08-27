@@ -34,6 +34,7 @@ output candidates_100  --------------> shopping_state + candidates_100
 主要文件：
 
 - `src/item.py`：跨模块共享的数据类。
+- `src/attribute.py`：hard/soft constraint 共用的标准属性契约。
 - `src/reranking/reranker.py`：候选清洗、占位打分、排序和官方格式转换。
 - `src/reranking/test_reranker.py`：对象契约及 Reranking 测试。
 - `examples/reranker_demo.py`：完整模拟输入输出。
@@ -42,6 +43,7 @@ output candidates_100  --------------> shopping_state + candidates_100
 
 ```python
 from src.item import Item, Candidate, RankedCandidate
+from src.attribute import AttributeName, AttributeValue, normalize_attribute_map
 from src.reranking import rerank, recommendations_from_ranking
 ```
 
@@ -225,6 +227,51 @@ Candidates10 = list[RankedCandidate]
 兼容期仍导出旧的小写别名，但新代码统一使用 `Item`、`Candidate`、
 `RankedCandidate`、`Candidates100` 和 `Candidates10`。
 
+### 3.5 `AttributeName`、`AttributeValue` 和 `AttributeMap`
+
+模块 2 的 `hard_constraint` 与 `soft_constraint` 统一使用：
+
+```python
+AttributeMap = dict[AttributeName, AttributeValue]
+```
+
+`AttributeName` 的最终标准字段为：
+
+```text
+category, material, color, size, fit, style, pattern, brand,
+budget, feature, use_case, target_user, rating, quantity, others
+```
+
+`AttributeValue` 统一表达三种常见值，避免不同字段分别使用 `list`、`dict`
+和 `None`：
+
+```python
+AttributeValue(
+    values=["black", "white"],       # 离散文本值
+    minimum=50,                       # 可选数值下界
+    maximum=100,                      # 可选数值上界
+    unit="USD",                      # 可选单位
+    details={"waist": ["32 inches"]},  # size/others 等子字段
+)
+```
+
+建议模块 2 对 LLM 或规则提取结果统一调用：
+
+```python
+hard_constraint = normalize_attribute_map(raw_hard_constraint)
+soft_constraint = normalize_attribute_map(raw_soft_constraint)
+```
+
+常见别名会自动归一化，例如 `categories -> category`、
+`Fabric Type -> material`、`Department -> target_user`、
+`Occasion -> use_case`。不能归类的字段不会丢弃，而是保存为：
+
+```python
+AttributeName.OTHERS: AttributeValue(
+    details={"care_instructions": ["hand wash only"]}
+)
+```
+
 ## 4. Reranking 输入
 
 入口：
@@ -269,16 +316,16 @@ shopping_state.user_message = (
 )
 shopping_state.turn = 2
 shopping_state.intent = "buying"
-shopping_state.hard_constraint = {
+shopping_state.hard_constraint = normalize_attribute_map({
     "category": "running shoes",
     "budget": {"max": 100},
     "material": "mesh",
-}
-shopping_state.soft_constraint = {
+})
+shopping_state.soft_constraint = normalize_attribute_map({
     "color": "black",
     "feature": ["lightweight", "comfortable"],
-}
-shopping_state.no_prefernce = ["brand"]
+})
+shopping_state.no_prefernce = [AttributeName.BRAND]
 ```
 
 注意：团队当前接口使用 `no_prefernce` 这个拼写。Reranking 也兼容

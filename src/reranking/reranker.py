@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeAlias
 
+from ..attribute import AttributeMap, AttributeName, AttributeValue
 from ..item import Candidate, Candidates10, Item, RankedCandidate
 
 
@@ -44,9 +45,9 @@ class ShoppingStateProtocol(Protocol):
     user_message: str
     turn: int
     intent: Literal["buying", "browsing"]
-    hard_constraint: Mapping[str, Any]
-    soft_constraint: Mapping[str, Any]
-    no_prefernce: Any
+    hard_constraint: AttributeMap
+    soft_constraint: AttributeMap
+    no_prefernce: Sequence[AttributeName]
 
 
 ShoppingStateInput: TypeAlias = ShoppingStateProtocol | Mapping[str, Any]
@@ -71,6 +72,8 @@ def _is_sequence(value: object) -> bool:
 
 
 def _text(value: object) -> str:
+    if isinstance(value, AttributeValue):
+        return _text([value.values, value.details])
     if isinstance(value, Mapping):
         return " ".join(f"{key} {_text(item)}" for key, item in value.items())
     if _is_sequence(value):
