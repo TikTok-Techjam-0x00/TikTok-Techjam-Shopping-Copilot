@@ -3,7 +3,7 @@
 3B has one responsibility: decide what to ask next.
 
 ```python
-from src import decide_ask, record_asked_attribute
+from src.dialogue import decide_ask, record_asked_attribute
 
 decision = decide_ask(state_from_module_2, ranking_result_from_module_3)
 # {"ask_attribute": "material", "message": "Which material do you prefer: ...?"}

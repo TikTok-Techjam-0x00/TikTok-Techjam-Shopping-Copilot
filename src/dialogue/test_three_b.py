@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.three_b import build_question, decide_ask, record_asked_attribute
+from src.dialogue import build_question, decide_ask, record_asked_attribute
 
 
 RANKING_RESULT = {

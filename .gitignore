@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 results.json
 data/catalog.jsonl
+data/catalog.jsonl.gz
+data/SHA256SUMS
 data/releases/
 # Organizer-only code, private evaluation data, manifests, and build reports.
 organizer/
