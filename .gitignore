@@ -1,9 +1,12 @@
 __pycache__/
 *.py[cod]
+.venv/
+.vscode/
+.pytest_cache/
 .DS_Store
 .env
-.venv/
 results.json
+artifacts/
 data/catalog.jsonl
 data/catalog.jsonl.gz
 data/SHA256SUMS

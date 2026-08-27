@@ -1,0 +1,5 @@
+# Runtime dependencies for retrieval experiments and Qwen/DashScope access.
+numpy>=1.26,<3.0
+openai>=1.40,<3.0
+python-dotenv>=1.0,<2.0
+
