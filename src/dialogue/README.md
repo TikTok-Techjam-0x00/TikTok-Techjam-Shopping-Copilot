@@ -206,8 +206,8 @@ excluded
   + no_prefernce
 ```
 
-如果 category 尚未出现，3B 优先确认 category。其他属性再根据候选区分度、画像
-和轮次策略评分。
+如果 category 尚未出现，3B 优先确认 category。其他属性再根据 Base Priority、
+动态 Answerability 和 Ranking Impact 评分。
 
 ### 5.2 商品属性提取
 
@@ -224,6 +224,11 @@ title / features / description / categories / details 文本
         ↓
 有限正则 fallback
 ```
+
+`use_case` 是一个严格例外：只从 `features` 和 `details` 搜索，并且只识别
+`hiking / running / gym / winter / outdoor / work`。title、description、categories、
+store 和顶层 `use_case` 字段都不会计入其候选 coverage；`wedding / travel / daily`
+也不会被识别为 `use_case`。
 
 例如以下 details 无需出现在正则词典中即可识别：
 
@@ -373,6 +378,7 @@ python -m unittest src.dialogue.test_three_b -v
 - hard/soft constraint、`AttributeValue`、no preference 和 asked attributes。
 - dict State 与 object State。
 - details 的 Material、Color、Brand 及文本 fallback。
+- use_case 仅使用 features/details 和六个官方关键词。
 - Fabric/Fit/Width 和 feature 排他分类与官方属性边界一致。
 - 空候选、缺少所有分数字段和 turn >= 10。
 - 语义分层 Base Priority、动态 Answerability、18 分 Question Value 上限。

@@ -332,6 +332,59 @@ class AskAttributeSelectorTest(unittest.TestCase):
         self.assertEqual(_values(product, "material"), {"cotton"})
         self.assertEqual(_values(product, "color"), {"black"})
 
+    def test_use_case_recognizes_all_six_official_keywords(self) -> None:
+        for keyword in ("hiking", "running", "gym", "winter", "outdoor", "work"):
+            with self.subTest(keyword=keyword):
+                self.assertEqual(
+                    _values(
+                        {
+                            "features": [f"Designed for {keyword}"],
+                            "title": "Outdoor Shoes",
+                        },
+                        "use_case",
+                    ),
+                    {keyword},
+                )
+
+    def test_use_case_reads_running_from_details(self) -> None:
+        self.assertEqual(
+            _values(
+                {"details": {"Recommended Use": "Running"}},
+                "use_case",
+            ),
+            {"running"},
+        )
+
+    def test_use_case_does_not_read_title_description_or_categories(self) -> None:
+        product = {
+            "title": "Women's Running Shoes",
+            "description": ["Designed for hiking"],
+            "categories": ["Gym Shoes"],
+            "features": [],
+            "details": {},
+        }
+        self.assertEqual(_values(product, "use_case"), set())
+
+    def test_use_case_does_not_read_top_level_use_case_field(self) -> None:
+        product = {"use_case": "running", "features": [], "details": {}}
+        self.assertEqual(_values(product, "use_case"), set())
+
+    def test_unsupported_use_case_words_remain_outside_use_case(self) -> None:
+        cases = (
+            {"features": ["Perfect for travel"]},
+            {"features": ["Great for daily wear"]},
+            {"details": {"Occasion": "Wedding"}},
+            {"details": {"Use Case": "Travel"}},
+        )
+        for product in cases:
+            with self.subTest(product=product):
+                self.assertEqual(_values(product, "use_case"), set())
+
+        self.assertEqual(
+            _values({"features": ["Perfect for travel"]}, "feature"),
+            {"perfect for travel"},
+        )
+
     def test_brand_prefers_details_then_falls_back_to_store(self) -> None:
         self.assertEqual(
             _values({"details": {"Brand": "Acme"}, "store": "Other Store"}, "brand"),

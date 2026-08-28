@@ -55,7 +55,7 @@ VALUE_PATTERNS = {
     ),
     "size": re.compile(r"\b(xxs|xs|small|medium|large|xl|xxl|wide|narrow|petite|plus size)\b", re.I),
     "style": re.compile(r"\b(casual|formal|classic|modern|vintage|sporty|slim|relaxed)\b", re.I),
-    "use_case": re.compile(r"\b(hiking|running|gym|winter|outdoor|work|wedding|travel|daily)\b", re.I),
+    "use_case": re.compile(r"\b(hiking|running|gym|winter|outdoor|work)\b", re.I),
 }
 
 # 统一常见商品文本的官方 ask_attribute 边界；未命中规则的文本属于 feature。
@@ -265,6 +265,9 @@ def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
         explicit = _first_value(product.get("feature"), product.get("features"), detail)
     elif attribute == "budget":
         explicit = _first_value(product.get("budget"), product.get("price"), detail)
+    elif attribute == "use_case":
+        # 所有 use_case 值都必须经过统一的六词正则，不能由 details key 绕过词表。
+        explicit = None
     else:
         explicit = _first_value(product.get(attribute), detail)
 
@@ -292,10 +295,17 @@ def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
     # 没有显式字段时，再从可搜索文本中提取有限的常见值。
     pattern = VALUE_PATTERNS.get(attribute)
     if pattern:
-        searchable = _text({
-            key: product.get(key)
-            for key in ("title", "details", "features", "description", "categories")
-        })
+        if attribute == "use_case":
+            # 官方 hidden constraints 的 use_case 来源只覆盖 features 和 details。
+            searchable = _text({
+                "features": product.get("features"),
+                "details": product.get("details"),
+            })
+        else:
+            searchable = _text({
+                key: product.get(key)
+                for key in ("title", "details", "features", "description", "categories")
+            })
         return {match.lower() for match in pattern.findall(searchable)}
     return set()
 
