@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Literal, Protocol, TypeAlias
 
 from ..attribute import (
@@ -27,6 +28,7 @@ from .constraint_matcher import (
     ConstraintMatcher,
     MatchStatus,
 )
+from .feature_extractor import CandidateFeatureExtractor, CandidateSignals
 
 
 ATTRIBUTE_ORDER = (
@@ -42,7 +44,36 @@ ATTRIBUTE_ORDER = (
 )
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
-CONSTRAINT_MATCHER = ConstraintMatcher()
+
+
+class HardConstraintStrategy(str, Enum):
+    """How hard constraints affect final candidate ordering."""
+
+    SOFT_PENALTY = "soft_penalty"
+    FEASIBILITY_TIER = "feasibility_tier"
+
+
+@dataclass(frozen=True, slots=True)
+class RerankerStrategyConfig:
+    """First-version intent routing and within-tier relevance weights."""
+
+    browsing_strategy: HardConstraintStrategy = HardConstraintStrategy.SOFT_PENALTY
+    buying_strategy: HardConstraintStrategy = HardConstraintStrategy.FEASIBILITY_TIER
+
+    browsing_retrieval_weight: float = 0.90
+    browsing_profile_weight: float = 0.10
+
+    buying_retrieval_weight: float = 0.55
+    buying_hard_match_weight: float = 0.25
+    buying_soft_match_weight: float = 0.15
+    buying_profile_weight: float = 0.05
+
+    def strategy_for(self, intent: str) -> HardConstraintStrategy:
+        if intent == "browsing":
+            return self.browsing_strategy
+        if intent == "buying":
+            return self.buying_strategy
+        raise ValueError("intent must be 'buying' or 'browsing'")
 
 
 class ShoppingStateProtocol(Protocol):
@@ -235,83 +266,60 @@ def _rejected_violation_label(match: ConstraintMatch) -> str:
     return f"{match.attribute.value}:rejected:{requested}"
 
 
-def _score_candidate(
-    candidate: _PreparedCandidate,
-    hard: Mapping[str, Any],
-    soft: Mapping[str, Any],
-    rejected: Mapping[str, Any],
-    user_profile: Mapping[str, Any],
-    shopping_intent: str,
-) -> tuple[float, list[str], list[str]]:
-    """The placeholder scoring function to replace during ranking optimization."""
+def _matched_and_violations(
+    signals: CandidateSignals,
+) -> tuple[list[str], list[str]]:
     matched: list[str] = []
     violations: list[str] = []
-    hard_match_total = 0.0
-    soft_match_total = 0.0
-
-    constraint_matches = CONSTRAINT_MATCHER.match_candidate(
-        candidate.product,
-        hard=hard,
-        soft=soft,
-        rejected=rejected,
-    )
-    for match in constraint_matches.hard:
-        hard_match_total += match.score
+    for match in signals.constraint_matches.hard:
         if match.status is MatchStatus.SATISFIED:
             matched.append(match.attribute.value)
         elif match.status is MatchStatus.VIOLATED:
             violations.append(_hard_violation_label(match))
 
-    for match in constraint_matches.soft:
-        soft_match_total += match.score
+    for match in signals.constraint_matches.soft:
         if match.status is MatchStatus.SATISFIED:
             matched.append(match.attribute.value)
 
-    for match in constraint_matches.rejected:
+    for match in signals.constraint_matches.rejected:
         if match.status is MatchStatus.VIOLATED:
             violations.append(_rejected_violation_label(match))
+    return _ordered_unique(matched), violations
 
-    hard_ratio = (
-        hard_match_total / len(constraint_matches.hard)
-        if constraint_matches.hard
-        else 0.0
-    )
-    soft_ratio = (
-        soft_match_total / len(constraint_matches.soft)
-        if constraint_matches.soft
-        else 0.0
-    )
-    profile_ratio = _profile_match_ratio(candidate.product, user_profile)
-    # A stated rejection or hard-constraint mismatch should dominate a small
-    # retrieval-score advantage. Keep violating candidates for diagnostics, but
-    # push them below feasible candidates. A learned ranker can replace this
-    # deliberately simple binary penalty later.
-    violation_penalty = 1.0 if violations else 0.0
 
-    if shopping_intent == "browsing":
-        # Browsing keeps retrieval variety and soft/profile signals relatively
-        # important. Cross-candidate diversity will replace this placeholder.
-        score = (
-            0.70 * candidate.retrieval_score
-            + 0.10 * hard_ratio
-            + 0.10 * soft_ratio
-            + 0.10 * profile_ratio
-            - 0.75 * violation_penalty
+def _score_signals(
+    signals: CandidateSignals,
+    strategy: HardConstraintStrategy,
+    config: RerankerStrategyConfig,
+) -> float:
+    if strategy is HardConstraintStrategy.SOFT_PENALTY:
+        return (
+            config.browsing_retrieval_weight
+            * signals.normalized_retrieval_score
+            + config.browsing_profile_weight * signals.profile_match_score
+            + signals.soft_penalty_adjustment
         )
-    else:
-        # Buying favors candidates that satisfy concrete requirements.
-        score = (
-            0.55 * candidate.retrieval_score
-            + 0.25 * hard_ratio
-            + 0.15 * soft_ratio
-            + 0.05 * profile_ratio
-            - 0.80 * violation_penalty
-        )
-    return score, _ordered_unique(matched), violations
+    return (
+        config.buying_retrieval_weight * signals.normalized_retrieval_score
+        + config.buying_hard_match_weight * signals.hard_match_score
+        + config.buying_soft_match_weight * signals.soft_match_score
+        + config.buying_profile_weight * signals.profile_match_score
+    )
 
 
 class SimpleReranker:
     """Stable module-3A interface with a deliberately replaceable scorer."""
+
+    def __init__(
+        self,
+        *,
+        constraint_matcher: ConstraintMatcher | None = None,
+        feature_extractor: CandidateFeatureExtractor | None = None,
+        strategy_config: RerankerStrategyConfig | None = None,
+    ) -> None:
+        self.constraint_matcher = constraint_matcher or ConstraintMatcher()
+        self.feature_extractor = feature_extractor or CandidateFeatureExtractor()
+        self.strategy_config = strategy_config or RerankerStrategyConfig()
 
     def rerank(
         self,
@@ -325,25 +333,52 @@ class SimpleReranker:
         prepared = _prepare_candidates(candidates_100)
         hard, soft = _state_constraints(shopping_state)
         shopping_intent = _shopping_intent(shopping_state)
+        strategy = self.strategy_config.strategy_for(shopping_intent)
         rejected = _constraint_map(_state_value(shopping_state, "rejected_values"))
         embedded_profile = _state_value(shopping_state, "user_profile")
         profile = embedded_profile if isinstance(embedded_profile, Mapping) else {}
 
-        scored: list[tuple[float, _PreparedCandidate, list[str], list[str]]] = []
+        scored: list[
+            tuple[float, _PreparedCandidate, CandidateSignals, list[str], list[str]]
+        ] = []
         for candidate in prepared:
-            score, matched, violations = _score_candidate(
-                candidate,
-                hard,
-                soft,
-                rejected,
-                profile,
-                shopping_intent,
+            constraint_matches = self.constraint_matcher.match_candidate(
+                candidate.product,
+                hard=hard,
+                soft=soft,
+                rejected=rejected,
             )
-            scored.append((score, candidate, matched, violations))
+            signals = self.feature_extractor.extract(
+                candidate.source,
+                constraint_matches,
+                normalized_retrieval_score=candidate.retrieval_score,
+                profile_match_score=_profile_match_ratio(candidate.product, profile),
+            )
+            score = _score_signals(signals, strategy, self.strategy_config)
+            matched, violations = _matched_and_violations(signals)
+            scored.append((score, candidate, signals, matched, violations))
 
-        scored.sort(key=lambda row: (-row[0], row[1].original_index, row[1].parent_asin))
+        if strategy is HardConstraintStrategy.FEASIBILITY_TIER:
+            scored.sort(
+                key=lambda row: (
+                    row[2].feasibility_tier,
+                    -row[0],
+                    row[1].original_index,
+                    row[1].parent_asin,
+                )
+            )
+        else:
+            scored.sort(
+                key=lambda row: (
+                    -row[0],
+                    row[1].original_index,
+                    row[1].parent_asin,
+                )
+            )
         candidates_10: list[RankedCandidate] = []
-        for rank, (score, candidate, matched, violations) in enumerate(scored[:top_k], start=1):
+        for rank, (score, candidate, _, matched, violations) in enumerate(
+            scored[:top_k], start=1
+        ):
             candidates_10.append(
                 RankedCandidate.from_candidate(
                     candidate.source,

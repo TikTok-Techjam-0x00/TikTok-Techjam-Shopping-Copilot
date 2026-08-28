@@ -7,7 +7,15 @@ from typing import Any
 
 from src.attribute import AttributeMap, AttributeName, normalize_attribute_map
 from src.item import DATASET_FIELDS, Candidate, Item, RankedCandidate
-from src.reranking import recommendations_from_ranking, rerank
+from src.reranking import (
+    CandidateFeatureExtractor,
+    ConstraintFeatureWeights,
+    HardConstraintStrategy,
+    RerankerStrategyConfig,
+    SimpleReranker,
+    recommendations_from_ranking,
+    rerank,
+)
 from src.dialogue import decide_ask
 
 
@@ -129,6 +137,139 @@ class ProductModelTest(unittest.TestCase):
 
 
 class SimpleRerankerTest(unittest.TestCase):
+    def test_default_strategy_routes_browsing_and_buying_differently(self) -> None:
+        config = RerankerStrategyConfig()
+        self.assertIs(
+            config.strategy_for("browsing"),
+            HardConstraintStrategy.SOFT_PENALTY,
+        )
+        self.assertIs(
+            config.strategy_for("buying"),
+            HardConstraintStrategy.FEASIBILITY_TIER,
+        )
+
+    def test_buying_feasibility_tier_precedes_retrieval_relevance(self) -> None:
+        state = {
+            "intent": "buying",
+            "hard_constraint": normalize_attribute_map({"material": "mesh"}),
+            "soft_constraint": {},
+            "rejected_values": {},
+            "user_profile": {},
+        }
+        candidates = [
+            Candidate(
+                item=Item.from_dict(
+                    {
+                        "parent_asin": "VIOLATED",
+                        "title": "Leather shoes",
+                        "details": {"Material": "Leather"},
+                    }
+                ),
+                retrieval_score=1.0,
+            ),
+            Candidate(
+                item=Item.from_dict(
+                    {"parent_asin": "UNKNOWN", "title": "Everyday shoes"}
+                ),
+                retrieval_score=0.9,
+            ),
+            Candidate(
+                item=Item.from_dict(
+                    {
+                        "parent_asin": "SATISFIED",
+                        "title": "Mesh shoes",
+                        "details": {"Material": "Mesh"},
+                    }
+                ),
+                retrieval_score=0.1,
+            ),
+        ]
+        ranked = rerank(state, candidates)
+        self.assertEqual(
+            [candidate.parent_asin for candidate in ranked],
+            ["SATISFIED", "UNKNOWN", "VIOLATED"],
+        )
+
+    def test_buying_rejected_match_is_always_in_the_last_tier(self) -> None:
+        state = {
+            "intent": "buying",
+            "hard_constraint": {},
+            "soft_constraint": {},
+            "rejected_values": normalize_attribute_map({"material": "leather"}),
+            "user_profile": {},
+        }
+        candidates = [
+            Candidate(
+                item=Item.from_dict(
+                    {
+                        "parent_asin": "REJECTED",
+                        "details": {"Material": "Leather"},
+                    }
+                ),
+                retrieval_score=1.0,
+            ),
+            Candidate(
+                item=Item.from_dict(
+                    {
+                        "parent_asin": "SAFE",
+                        "details": {"Material": "Mesh"},
+                    }
+                ),
+                retrieval_score=0.1,
+            ),
+        ]
+        ranked = rerank(state, candidates)
+        self.assertEqual(
+            [candidate.parent_asin for candidate in ranked],
+            ["SAFE", "REJECTED"],
+        )
+
+    def test_browsing_soft_penalty_keeps_candidates_and_does_not_use_tiers(self) -> None:
+        state = {
+            "intent": "browsing",
+            "hard_constraint": normalize_attribute_map({"material": "mesh"}),
+            "soft_constraint": {},
+            "rejected_values": {},
+            "user_profile": {},
+        }
+        candidates = [
+            Candidate(
+                item=Item.from_dict(
+                    {
+                        "parent_asin": "SATISFIED",
+                        "details": {"Material": "Mesh"},
+                    }
+                ),
+                retrieval_score=0.1,
+            ),
+            Candidate(
+                item=Item.from_dict(
+                    {
+                        "parent_asin": "VIOLATED",
+                        "details": {"Material": "Leather"},
+                    }
+                ),
+                retrieval_score=1.0,
+            ),
+        ]
+        # A deliberately small penalty proves Browsing is score-only: if a
+        # feasibility tier leaked into this path, SATISFIED would rank first.
+        feature_extractor = CandidateFeatureExtractor(
+            ConstraintFeatureWeights(
+                hard_satisfied=0.0,
+                hard_violated=-0.05,
+            )
+        )
+        ranked = SimpleReranker(feature_extractor=feature_extractor).rerank(
+            state,
+            candidates,
+        )
+        self.assertEqual(
+            [candidate.parent_asin for candidate in ranked],
+            ["VIOLATED", "SATISFIED"],
+        )
+        self.assertIn("material:not_matched", ranked[0].violation)
+
     def test_hard_constraints_can_change_retrieval_order(self) -> None:
         candidates_10 = rerank(SHOPPING_STATE, CANDIDATES_100)
         self.assertEqual(candidates_10[0].item.parent_asin, "MESH")

@@ -311,14 +311,16 @@ sort_key = (
 
 优点：Buying 的约束执行更可靠。缺点：State 或属性解析错误时影响较大。
 
-### 6.3 推荐比较
+### 6.3 第一版采用策略
 
 ```text
-Buying：H1 vs H2
-Browsing：优先 H1
+Buying：H2 Feasibility Tier
+Browsing：H1 Soft Penalty
 ```
 
-每种策略都必须单独记录 promotion 和 demotion，不能只看少数成功案例。
+两条路径均不删除候选。Buying 使用 `(tier, -relevance)` 排序；Browsing 完全不
+读取 tier，只把 H1 权重计入最终分数。后续消融仍应保留 H1/H2 对调配置，并单独
+记录 promotion 和 demotion。
 
 ## 7. Candidate Feature Extractor
 
@@ -328,27 +330,37 @@ Browsing：优先 H1
 @dataclass
 class CandidateSignals:
     candidate: Candidate
+    constraint_matches: CandidateConstraintMatches
 
-    normalized_bm25_score: float
+    normalized_retrieval_score: float
     dense_score: float | None
+    bm25_score: float | None
     retrieval_rank_score: float
 
     hard_satisfied_count: int
     hard_unknown_count: int
     hard_violation_count: int
+    hard_match_score: float
     hard_weighted_score: float
 
-    soft_match_count: int
+    soft_satisfied_count: int
+    soft_unknown_count: int
+    soft_violation_count: int
+    soft_match_score: float
     soft_weighted_score: float
 
     rejected_match_count: int
+    rejected_unknown_count: int
+    rejected_weighted_score: float
     profile_match_score: float
 
     semantic_score: float | None
     feasibility_tier: int
+    soft_penalty_adjustment: float
 ```
 
-建议保留每个属性的 `ConstraintMatch`，但不要把完整诊断塞入官方 response。
+当前实现位于 `feature_extractor.py`。每个属性的 `ConstraintMatch` 保存在内部
+signals 中，但不把完整诊断塞入官方 response。
 
 ### 7.1 Retrieval 分数标准化选择
 
@@ -701,9 +713,10 @@ adapter 使用它。
 
 1. 接入 1 号的 Product Attribute View。
 2. 实现 Query Serializer。
-3. 实现 `ConstraintMatch` 以及属性专用 matcher。
-4. 区分 SATISFIED、UNKNOWN、VIOLATED。
-5. 比较 H1 Soft Penalty 和 H2 Feasibility Tier。
+3. 已实现 `ConstraintMatch` 以及属性专用 matcher。
+4. 已区分 SATISFIED、UNKNOWN、VIOLATED。
+5. 已实现 Candidate Feature Extractor。
+6. 第一版采用 Browsing H1、Buying H2；后续 replay 中再做对调消融。
 
 ### 阶段 C：语义精排
 

@@ -21,7 +21,19 @@ from .constraint_matcher import (
     MultiValuePolicy,
     match_constraint,
 )
-from .reranker import SimpleReranker, recommendations_from_ranking, rerank
+from .feature_extractor import (
+    CandidateFeatureExtractor,
+    CandidateSignals,
+    ConstraintFeatureWeights,
+    extract_candidate_features,
+)
+from .reranker import (
+    HardConstraintStrategy,
+    RerankerStrategyConfig,
+    SimpleReranker,
+    recommendations_from_ranking,
+    rerank,
+)
 
 __all__ = [
     "Item",
@@ -41,6 +53,12 @@ __all__ = [
     "ConstraintMatcherConfig",
     "ConstraintMatcher",
     "match_constraint",
+    "ConstraintFeatureWeights",
+    "CandidateSignals",
+    "CandidateFeatureExtractor",
+    "extract_candidate_features",
+    "HardConstraintStrategy",
+    "RerankerStrategyConfig",
     "SimpleReranker",
     "rerank",
     "recommendations_from_ranking",

@@ -508,35 +508,78 @@ matches = matcher.match_candidate(
   `SATISFIED`，缺少信息仍为 `UNKNOWN`。
 - 结构化属性优先；只有结构化信息不足时才使用与该属性对应的商品文本 fallback。
 
-当前 scorer 的融合权重暂时保持不变，以隔离 Constraint Matcher 本身带来的变化。
+### 6.1 Candidate Feature Extractor
 
-共同信号：
+`feature_extractor.py` 将一个候选的全部 matcher 结果转换为
+`CandidateSignals`，主要包括：
 
-- 归一化 Retrieval 融合分数。
-- 硬约束匹配率。
-- 软约束匹配率。
-- `user_profile.preference_tags` 的词语匹配率。
-- 是否存在硬约束或明确拒绝值违规。
+```text
+normalized_retrieval_score / retrieval_rank_score
+bm25_score / dense_score
+hard_satisfied_count / hard_unknown_count / hard_violation_count
+hard_match_score / hard_weighted_score
+soft_satisfied_count / soft_unknown_count / soft_violation_count
+soft_match_score / soft_weighted_score
+rejected_match_count / rejected_unknown_count / rejected_weighted_score
+profile_match_score / semantic_score
+feasibility_tier / soft_penalty_adjustment
+```
 
-`buying`：
+`constraint_matches` 原样保留在 `CandidateSignals` 中。因此更换权重、融合方式或
+排序策略时不需要重新执行商品匹配，诊断证据也不会丢失。
+
+### 6.2 Buying：Feasibility Tier
+
+Buying 先按可行性分层，再在同一层内按当前相关度分数排序：
+
+```text
+Tier 0：所有 hard 明确满足，或者当前没有 hard
+Tier 1：没有 hard violation，但至少一个 hard UNKNOWN
+Tier 2：至少一个 hard VIOLATED
+Tier 3：命中任意 rejected value
+```
+
+排序键等价于：
+
+```python
+(feasibility_tier, -relevance_score, original_order, parent_asin)
+```
+
+当前同层相关度为：
 
 ```text
 0.55 * retrieval
-+ 0.25 * hard constraint match
-+ 0.15 * soft constraint match
++ 0.25 * hard match score
++ 0.15 * soft match score
 + 0.05 * profile match
-- 0.80 * violation penalty
 ```
 
-`browsing`：
+这保证低 Retrieval 分但完整满足 hard 的商品，仍排在高 Retrieval 但 hard 未知或
+明确冲突的商品前面。Tier 只改变顺序，不删除候选。
+
+### 6.3 Browsing：Soft Penalty
+
+Browsing 不使用 Tier，也不删除违反约束的候选，而是使用分数调整：
 
 ```text
-0.70 * retrieval
-+ 0.10 * hard constraint match
-+ 0.10 * soft constraint match
+0.90 * retrieval
 + 0.10 * profile match
-- 0.75 * violation penalty
++ soft_penalty_adjustment
 ```
+
+第一版 adjustment 权重为：
+
+```text
+hard SATISFIED  +2.0
+hard UNKNOWN     0.0
+hard VIOLATED   -4.0
+soft SATISFIED  +1.0
+soft UNKNOWN     0.0
+soft VIOLATED    0.0
+rejected match  -6.0
+```
+
+这些权重集中在 `ConstraintFeatureWeights`，可以替换后直接做消融实验。
 
 当前仍属于可解释的规则基线，后续应重点优化：
 
@@ -547,8 +590,8 @@ matches = matcher.match_candidate(
 - 更细粒度的违规严重度和可解释分项。
 - 使用 public sessions 调整权重并做消融实验。
 
-替换算法时优先修改 `reranker.py` 的 `_score_candidate()`，不要改变
-`shopping_state + candidates_100 -> candidates_10` 的边界。
+替换算法时应优先调整 `ConstraintFeatureWeights`、`RerankerStrategyConfig` 或
+scorer，不要改变 `shopping_state + candidates_100 -> candidates_10` 的边界。
 
 ## 7. 模块责任边界
 
@@ -605,6 +648,9 @@ Reranking 测试覆盖：
 - `RankedCandidate.item` 是否复用原始 `Item`。
 - BM25、Dense、Retrieval 分数是否保留到输出。
 - 硬约束能否改变 Retrieval 原始顺序。
+- CandidateSignals 的计数、匹配分、Soft Penalty 和 Tier 是否正确。
+- Buying 是否严格先按 Tier、再按同层相关度排序。
+- Browsing 是否只调分、不删除候选，也不意外启用 Tier。
 - 输出是否为 `list[RankedCandidate]` 且名次连续。
 - `no_prefernce` 是否真正排除属性。
 - `intent` 是否只允许 buying/browsing。
