@@ -49,6 +49,9 @@ python -m src.reranking.replay.evaluator `
   --experiments retrieval_order s1_rule_fuzzy
 ```
 
+The CLI prints progress every 100 cases by default; use `--progress-every N` to
+change it or `--progress-every 0` to disable progress output.
+
 The evaluator verifies checksums, restores each `Candidate` from the exact
 recorded Catalog version, ranks all candidates for diagnostics, and writes a new
 result version under `<dataset-run>/results/`:

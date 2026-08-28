@@ -415,10 +415,13 @@ def evaluate_replay(
     experiments: Mapping[str, FullRankingProtocol],
     output_root: str | Path | None = None,
     run_id: str | None = None,
+    progress_every: int = 0,
     command: list[str] | None = None,
 ) -> Path:
     if not experiments:
         raise ValueError("at least one experiment is required")
+    if progress_every < 0:
+        raise ValueError("progress_every must not be negative")
     dataset_directory = Path(dataset_directory).resolve()
     catalog_path = Path(catalog_path).resolve()
     manifest, cases, labels = load_replay_dataset(dataset_directory)
@@ -447,7 +450,7 @@ def evaluate_replay(
     max_turns = int(manifest["generation_policy"]["max_turns"])
     for name, ranker in experiments.items():
         rows: list[dict[str, Any]] = []
-        for case in cases:
+        for index, case in enumerate(cases, start=1):
             candidates = _restore_candidates(case, catalog)
             started = time.perf_counter()
             ranking = ranker.rank_all(case.shopping_state, candidates)
@@ -462,6 +465,18 @@ def evaluate_replay(
             )
             rows.append(row)
             detailed_rows.append({"experiment": name, **row})
+            if progress_every and (index % progress_every == 0 or index == len(cases)):
+                print(
+                    json.dumps(
+                        {
+                            "experiment": name,
+                            "evaluated_cases": index,
+                            "total_cases": len(cases),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
         experiment_reports[name] = {
             "config": _experiment_config(ranker),
             "summary": summarize_experiment(rows, max_turns=max_turns),
@@ -503,6 +518,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--progress-every", type=int, default=100)
     return parser
 
 
@@ -515,6 +531,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         experiments={name: available[name] for name in args.experiments},
         output_root=args.output_root,
         run_id=args.run_id,
+        progress_every=args.progress_every,
         command=[sys.executable, "-m", "src.reranking.replay.evaluator", *(argv or sys.argv[1:])],
     )
     print(json.dumps({"replay_report": str(output)}, ensure_ascii=False, indent=2))
