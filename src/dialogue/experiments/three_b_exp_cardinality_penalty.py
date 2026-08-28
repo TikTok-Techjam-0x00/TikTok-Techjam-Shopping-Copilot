@@ -49,8 +49,8 @@ ATTRIBUTES = (
     "budget", "style", "color", "brand", "other",
 )
 
-# Module 2 的共享 AttributeName 比官方 ask_attribute 更细；3B 在边界处统一映射。
-ATTRIBUTE_NAME_ALIASES = {"others": "other", "fit": "size"}
+# 共享 AttributeName 已与官方 ask_attribute 完全一致；仅兼容旧版 fit 输入。
+ATTRIBUTE_NAME_ALIASES = {"fit": "style"}
 
 BASE_PRIORITY = {
     "category": 90.0,

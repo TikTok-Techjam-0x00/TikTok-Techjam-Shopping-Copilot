@@ -114,8 +114,8 @@ shopping_state.no_prefernce = [AttributeName.BRAND]
 shopping_state.asked_attributes = ["material"]
 ```
 
-共享枚举中的 `fit` 会在 3B 边界映射为官方 `ask_attribute="style"`，保持团队
-State 与 3B 输出枚举一致。
+共享枚举现在就是官方的十个 `ask_attribute` 字段。3B 仅把旧版输入中的
+`fit` 兼容映射为 `style`；新 State 应直接使用 `AttributeName.STYLE`。
 
 3B 当前只需要判断 constraint value 是否存在，不解析 `AttributeValue` 的具体
 语义。`no_prefernce` 是团队正式拼写；低成本保留 `no_preference` 兼容拼写。

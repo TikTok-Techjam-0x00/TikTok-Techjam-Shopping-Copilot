@@ -222,21 +222,21 @@ class AskAttributeSelectorTest(unittest.TestCase):
         decision = decide_ask(state, CANDIDATES_100)
         self.assertNotIn(decision["ask_attribute"], {"category", "budget", "color", "feature"})
 
-    def test_fit_and_others_use_three_b_attribute_names(self) -> None:
+    def test_shared_attributes_already_use_three_b_attribute_names(self) -> None:
         self.assertEqual(
             _known_attributes(
                 {
                     "hard_constraint": {
-                        AttributeName.FIT: AttributeValue(values=["wide"]),
+                        AttributeName.STYLE: AttributeValue(values=["wide fit"]),
                     },
                     "soft_constraint": {
-                        AttributeName.OTHERS: AttributeValue(
+                        AttributeName.OTHER: AttributeValue(
                             details={"gift_wrapping": ["required"]}
                         ),
                     },
                 }
             ),
-            {"size", "other"},
+            {"style", "other"},
         )
 
     def test_attribute_value_object_marks_constraint_as_known(self) -> None:
@@ -321,10 +321,10 @@ class AskAttributeSelectorTest(unittest.TestCase):
             {"waterproof"},
         )
 
-    def test_module_two_fit_constraint_is_known_as_size(self) -> None:
+    def test_legacy_fit_constraint_is_known_as_style(self) -> None:
         self.assertEqual(
             _known_attributes({"soft_constraint": {"fit": "relaxed"}}),
-            {"size"},
+            {"style"},
         )
 
     def test_item_uses_shared_detail_aliases(self) -> None:

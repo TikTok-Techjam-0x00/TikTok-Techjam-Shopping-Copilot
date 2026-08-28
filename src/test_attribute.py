@@ -11,25 +11,40 @@ from src.attribute import (
     extract_product_attributes,
     normalize_attribute_map,
     normalize_attribute_name,
+    product_attribute_text,
     product_attribute_values,
     to_official_ask_attribute,
 )
 
 
 class AttributeContractTest(unittest.TestCase):
-    def test_final_attribute_names_are_unique_and_include_others(self) -> None:
+    def test_attribute_names_exactly_match_official_ask_attributes(self) -> None:
         self.assertEqual(len(ATTRIBUTE_NAMES), len({name.value for name in ATTRIBUTE_NAMES}))
-        self.assertIn(AttributeName.OTHERS, ATTRIBUTE_NAMES)
-        self.assertIn(AttributeName.TARGET_USER, ATTRIBUTE_NAMES)
-        self.assertIn(AttributeName.RATING, ATTRIBUTE_NAMES)
+        self.assertEqual(
+            {name.value for name in ATTRIBUTE_NAMES},
+            {
+                "category",
+                "material",
+                "color",
+                "size",
+                "style",
+                "brand",
+                "budget",
+                "feature",
+                "use_case",
+                "other",
+            },
+        )
 
     def test_dataset_and_llm_aliases_use_canonical_names(self) -> None:
         self.assertIs(normalize_attribute_name("categories"), AttributeName.CATEGORY)
         self.assertIs(normalize_attribute_name("Fabric Type"), AttributeName.MATERIAL)
-        self.assertIs(normalize_attribute_name("Department"), AttributeName.TARGET_USER)
+        self.assertIs(normalize_attribute_name("Department"), AttributeName.STYLE)
+        self.assertIs(normalize_attribute_name("Pattern Type"), AttributeName.STYLE)
+        self.assertIs(normalize_attribute_name("Average Rating"), AttributeName.FEATURE)
         self.assertIs(normalize_attribute_name("Occasion"), AttributeName.USE_CASE)
         self.assertIs(normalize_attribute_name("Closure Type"), AttributeName.FEATURE)
-        self.assertIs(normalize_attribute_name("unrecognized field"), AttributeName.OTHERS)
+        self.assertIs(normalize_attribute_name("unrecognized field"), AttributeName.OTHER)
 
     def test_image_style_attributes_normalize_to_one_value_type(self) -> None:
         attributes = normalize_attribute_map(
@@ -60,7 +75,7 @@ class AttributeContractTest(unittest.TestCase):
         )
         self.assertTrue(all(isinstance(value, AttributeValue) for value in attributes.values()))
 
-    def test_range_representation_supports_budget_and_rating(self) -> None:
+    def test_range_representation_supports_budget_and_mapped_fields(self) -> None:
         attributes = normalize_attribute_map(
             {
                 "price": {"min": 50, "max": 100, "currency": "USD"},
@@ -69,20 +84,22 @@ class AttributeContractTest(unittest.TestCase):
         )
         budget = attributes[AttributeName.BUDGET]
         self.assertEqual((budget.minimum, budget.maximum, budget.unit), (50.0, 100.0, "USD"))
-        self.assertEqual(attributes[AttributeName.RATING].minimum, 4.2)
+        self.assertEqual(attributes[AttributeName.FEATURE].minimum, 4.2)
 
-    def test_unknown_fields_are_preserved_under_others(self) -> None:
+    def test_unknown_fields_are_preserved_under_singular_other(self) -> None:
         attributes = normalize_attribute_map(
             {
                 "Care Instructions": "hand wash only",
                 "Country of Origin": "USA",
-                "others": {"custom engraving": "available"},
+                "other": {"custom engraving": "available"},
             }
         )
-        others = attributes[AttributeName.OTHERS]
-        self.assertEqual(others.details["care_instructions"], ["hand wash only"])
-        self.assertEqual(others.details["country_of_origin"], ["USA"])
-        self.assertEqual(others.details["custom_engraving"], ["available"])
+        other = attributes[AttributeName.OTHER]
+        self.assertEqual(other.details["care_instructions"], ["hand wash only"])
+        self.assertEqual(other.details["country_of_origin"], ["USA"])
+        self.assertEqual(other.details["custom_engraving"], ["available"])
+        serialized = attribute_map_to_dict(attributes)
+        self.assertEqual(list(serialized), ["other"])
 
     def test_attribute_map_is_json_serializable(self) -> None:
         attributes = normalize_attribute_map(
@@ -98,10 +115,10 @@ class AttributeContractTest(unittest.TestCase):
 
     def test_internal_names_map_to_official_ask_attribute(self) -> None:
         self.assertEqual(to_official_ask_attribute(AttributeName.MATERIAL), "material")
-        self.assertEqual(to_official_ask_attribute(AttributeName.FIT), "size")
-        self.assertEqual(to_official_ask_attribute(AttributeName.PATTERN), "style")
-        self.assertEqual(to_official_ask_attribute(AttributeName.TARGET_USER), "other")
-        self.assertEqual(to_official_ask_attribute(AttributeName.OTHERS), "other")
+        self.assertEqual(to_official_ask_attribute("fit"), "style")
+        self.assertEqual(to_official_ask_attribute("pattern"), "style")
+        self.assertEqual(to_official_ask_attribute("target_user"), "feature")
+        self.assertEqual(to_official_ask_attribute("unrecognized field"), "other")
 
     def test_product_attributes_use_catalog_fields_and_detail_aliases(self) -> None:
         attributes = extract_product_attributes(
@@ -124,9 +141,17 @@ class AttributeContractTest(unittest.TestCase):
         self.assertEqual(attributes[AttributeName.CATEGORY].values, ["Shoes", "Hiking"])
         self.assertEqual(attributes[AttributeName.MATERIAL].values, ["Bamboo Viscose"])
         self.assertEqual(attributes[AttributeName.COLOR].values, ["Forest Green"])
+        self.assertEqual(attributes[AttributeName.STYLE].values, ["Women"])
         self.assertEqual(attributes[AttributeName.BRAND].values, ["Trail Works"])
         self.assertEqual(attributes[AttributeName.BUDGET].minimum, 89.5)
-        self.assertNotIn(AttributeName.OTHERS, attributes)
+        self.assertEqual(
+            attributes[AttributeName.OTHER].details["care_instructions"],
+            ["Hand Wash"],
+        )
+        self.assertEqual(
+            product_attribute_text(attributes, AttributeName.OTHER),
+            "Hand Wash",
+        )
 
     def test_product_text_fallback_only_fills_missing_attributes(self) -> None:
         attributes = extract_product_attributes(

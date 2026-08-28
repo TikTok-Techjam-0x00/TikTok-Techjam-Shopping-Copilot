@@ -238,8 +238,8 @@ AttributeMap = dict[AttributeName, AttributeValue]
 `AttributeName` 的最终标准字段为：
 
 ```text
-category, material, color, size, fit, style, pattern, brand,
-budget, feature, use_case, target_user, rating, quantity, others
+category, material, color, size, style, brand,
+budget, feature, use_case, other
 ```
 
 `AttributeValue` 统一表达三种常见值，避免不同字段分别使用 `list`、`dict`
@@ -251,7 +251,7 @@ AttributeValue(
     minimum=50,                       # 可选数值下界
     maximum=100,                      # 可选数值上界
     unit="USD",                      # 可选单位
-    details={"waist": ["32 inches"]},  # size/others 等子字段
+    details={"waist": ["32 inches"]},  # size/other 等子字段
 )
 ```
 
@@ -262,12 +262,12 @@ hard_constraint = normalize_attribute_map(raw_hard_constraint)
 soft_constraint = normalize_attribute_map(raw_soft_constraint)
 ```
 
-常见别名会自动归一化，例如 `categories -> category`、
-`Fabric Type -> material`、`Department -> target_user`、
+常见别名会自动归一化到官方十类，例如 `categories -> category`、
+`Fabric Type -> material`、`Department -> style`、
 `Occasion -> use_case`。不能归类的字段不会丢弃，而是保存为：
 
 ```python
-AttributeName.OTHERS: AttributeValue(
+AttributeName.OTHER: AttributeValue(
     details={"care_instructions": ["hand wash only"]}
 )
 ```

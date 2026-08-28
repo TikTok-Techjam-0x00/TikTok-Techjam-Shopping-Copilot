@@ -107,11 +107,11 @@ soft_constraint: AttributeMap = normalize_attribute_map({
 no_prefernce: list[AttributeName] = [AttributeName.BRAND]
 ```
 
-The canonical internal attribute names are:
+The canonical attribute names exactly match the evaluator's `ask_attribute` values:
 
 ```text
-category, material, color, size, fit, style, pattern, brand,
-budget, feature, use_case, target_user, rating, quantity, others
+category, material, color, size, style, brand,
+budget, feature, use_case, other
 ```
 
 Each entry is an `AttributeValue` with one stable shape:
@@ -127,7 +127,7 @@ AttributeValue(
 ```
 
 - `values` stores one or more categorical/text values.
-- `minimum` and `maximum` store numeric ranges such as budget or rating.
+- `minimum` and `maximum` store numeric ranges such as budget.
 - `unit` stores the currency or measurement unit.
 - `details` stores structured subfields such as product dimensions.
 
@@ -149,25 +149,26 @@ are ignored by Git and should not be committed.
 
 Call `normalize_attribute_map()` on rule-based or model-generated extraction
 results before saving them in `shopping_state`. It normalizes common catalog
-aliases such as `Fabric Type -> material`, `Department -> target_user`, and
+aliases such as `Fabric Type -> material`, `Department -> style`, and
 `Occasion -> use_case`. An unknown field is not discarded; it is retained under
-`AttributeName.OTHERS`:
+`AttributeName.OTHER`:
 
 ```python
 normalize_attribute_map({"Care Instructions": "hand wash only"})
 
 # Equivalent normalized content:
 {
-    AttributeName.OTHERS: AttributeValue(
+    AttributeName.OTHER: AttributeValue(
         details={"care_instructions": ["hand wash only"]}
     )
 }
 ```
 
-Internal attributes are richer than the evaluator's `ask_attribute` enum.
-Use `to_official_ask_attribute()` before returning a question to the official
-Agent interface; for example, internal `fit` maps to official `size`, while an
-unsupported or fallback attribute maps to official `other`.
+The public contract intentionally contains no extra enum members. Catalog and
+details aliases are folded into these ten fields, and
+`to_official_ask_attribute()` always returns an evaluator-valid value. The
+former richer schema remains available in `src/atrribute_detailed.py` for
+comparison or experiments, but production modules import `src.attribute`.
 
 See [`src/reranking/README.md`](src/reranking/README.md) for the full Reranking
 input/output contract and runnable examples.

@@ -1,11 +1,9 @@
-"""Official ten-field attribute contract shared by the shopping pipeline.
+"""Legacy detailed attribute contract kept for experiments and comparison.
 
-``AttributeName`` deliberately matches the evaluator's ``ask_attribute``
-vocabulary. Catalog/detail aliases are normalized into these ten fields, and
-unrecognized source fields are retained under ``AttributeName.OTHER``.
-
-The former richer schema is preserved in :mod:`src.atrribute_detailed` for
-comparison and experiments. Production modules should import this file.
+This is the richer pre-simplification version. New pipeline code should import
+``src.attribute`` instead. Use `AttributeMap` for `shopping_state.hard_constraint` and `soft_constraint`.
+Known names are represented by `AttributeName`; unknown source fields are retained
+under `AttributeName.OTHERS` instead of being discarded.
 """
 
 from __future__ import annotations
@@ -19,37 +17,55 @@ from typing import Any, TypeAlias
 
 
 class AttributeName(str, Enum):
-    """The evaluator-compatible attribute vocabulary."""
+    """Stable attribute names used across the shopping pipeline."""
 
     CATEGORY = "category"
     MATERIAL = "material"
     COLOR = "color"
     SIZE = "size"
+    FIT = "fit"
     STYLE = "style"
+    PATTERN = "pattern"
     BRAND = "brand"
     BUDGET = "budget"
     FEATURE = "feature"
     USE_CASE = "use_case"
-    OTHER = "other"
+    TARGET_USER = "target_user"
+    RATING = "rating"
+    QUANTITY = "quantity"
+    OTHERS = "others"
 
     def __str__(self) -> str:
         return self.value
 
 
 ATTRIBUTE_NAMES: tuple[AttributeName, ...] = tuple(AttributeName)
-OFFICIAL_ASK_ATTRIBUTES = frozenset(name.value for name in AttributeName)
+
+# Only these names can be returned directly as the official `ask_attribute`.
+OFFICIAL_ASK_ATTRIBUTES = frozenset(
+    {
+        "category",
+        "material",
+        "color",
+        "size",
+        "style",
+        "brand",
+        "budget",
+        "feature",
+        "use_case",
+        "other",
+    }
+)
 
 
-# Catalog fields and common details keys are aliases, not additional public
-# attributes. Their values are folded into one of the official ten fields.
 _ATTRIBUTE_ALIASES: dict[str, AttributeName] = {
-    # Product kind.
+    # Catalog hierarchy / product kind.
     "category": AttributeName.CATEGORY,
     "categories": AttributeName.CATEGORY,
     "product_category": AttributeName.CATEGORY,
     "product_type": AttributeName.CATEGORY,
     "item_type": AttributeName.CATEGORY,
-    # Material.
+    # Materials.
     "material": AttributeName.MATERIAL,
     "materials": AttributeName.MATERIAL,
     "fabric": AttributeName.MATERIAL,
@@ -63,11 +79,9 @@ _ATTRIBUTE_ALIASES: dict[str, AttributeName] = {
     "colors": AttributeName.COLOR,
     "colour": AttributeName.COLOR,
     "colours": AttributeName.COLOR,
-    # Label size and physical measurements.
+    # Apparel/shoe size plus physical measurements from catalog details.
     "size": AttributeName.SIZE,
     "sizes": AttributeName.SIZE,
-    "sizing": AttributeName.SIZE,
-    "shoe_width": AttributeName.SIZE,
     "dimension": AttributeName.SIZE,
     "dimensions": AttributeName.SIZE,
     "product_dimensions": AttributeName.SIZE,
@@ -78,19 +92,21 @@ _ATTRIBUTE_ALIASES: dict[str, AttributeName] = {
     "height": AttributeName.SIZE,
     "weight": AttributeName.SIZE,
     "item_weight": AttributeName.SIZE,
-    # Style, fit, pattern, and visual form.
+    # Fit.
+    "fit": AttributeName.FIT,
+    "fit_type": AttributeName.FIT,
+    "shoe_width": AttributeName.FIT,
+    # Style / visual form.
     "style": AttributeName.STYLE,
-    "fit": AttributeName.STYLE,
-    "fit_type": AttributeName.STYLE,
-    "pattern": AttributeName.STYLE,
-    "pattern_type": AttributeName.STYLE,
     "theme": AttributeName.STYLE,
     "shape": AttributeName.STYLE,
     "finish_type": AttributeName.STYLE,
-    "department": AttributeName.STYLE,
     "neck_style": AttributeName.STYLE,
     "sleeve_type": AttributeName.STYLE,
     "heel_type": AttributeName.STYLE,
+    # Pattern.
+    "pattern": AttributeName.PATTERN,
+    "pattern_type": AttributeName.PATTERN,
     # Brand / maker.
     "brand": AttributeName.BRAND,
     "brand_name": AttributeName.BRAND,
@@ -101,29 +117,13 @@ _ATTRIBUTE_ALIASES: dict[str, AttributeName] = {
     "price": AttributeName.BUDGET,
     "price_range": AttributeName.BUDGET,
     "cost": AttributeName.BUDGET,
-    # Product capabilities and evaluator-default constraint types.
+    # Product capabilities and construction details.
     "feature": AttributeName.FEATURE,
     "features": AttributeName.FEATURE,
     "special_feature": AttributeName.FEATURE,
     "special_features": AttributeName.FEATURE,
     "closure_type": AttributeName.FEATURE,
     "included_components": AttributeName.FEATURE,
-    "target_user": AttributeName.FEATURE,
-    "target_audience": AttributeName.FEATURE,
-    "audience": AttributeName.FEATURE,
-    "gender": AttributeName.FEATURE,
-    "age": AttributeName.FEATURE,
-    "age_range": AttributeName.FEATURE,
-    "age_range_description": AttributeName.FEATURE,
-    "suggested_users": AttributeName.FEATURE,
-    "rating": AttributeName.FEATURE,
-    "average_rating": AttributeName.FEATURE,
-    "rating_number": AttributeName.FEATURE,
-    "review_count": AttributeName.FEATURE,
-    "quantity": AttributeName.FEATURE,
-    "number_of_items": AttributeName.FEATURE,
-    "item_package_quantity": AttributeName.FEATURE,
-    "pack_size": AttributeName.FEATURE,
     # Activity, occasion, or intended situation.
     "use_case": AttributeName.USE_CASE,
     "usecase": AttributeName.USE_CASE,
@@ -132,13 +132,35 @@ _ATTRIBUTE_ALIASES: dict[str, AttributeName] = {
     "sport_type": AttributeName.USE_CASE,
     "activity": AttributeName.USE_CASE,
     "purpose": AttributeName.USE_CASE,
-    # Canonical fallback. Serialization always uses this singular official key.
-    "other": AttributeName.OTHER,
+    # Audience / department / age.
+    "target_user": AttributeName.TARGET_USER,
+    "target_audience": AttributeName.TARGET_USER,
+    "audience": AttributeName.TARGET_USER,
+    "department": AttributeName.TARGET_USER,
+    "gender": AttributeName.TARGET_USER,
+    "age": AttributeName.TARGET_USER,
+    "age_range": AttributeName.TARGET_USER,
+    "age_range_description": AttributeName.TARGET_USER,
+    "suggested_users": AttributeName.TARGET_USER,
+    # Rating and popularity requirements.
+    "rating": AttributeName.RATING,
+    "average_rating": AttributeName.RATING,
+    "rating_number": AttributeName.RATING,
+    "review_count": AttributeName.RATING,
+    # Multipacks and item counts.
+    "quantity": AttributeName.QUANTITY,
+    "number_of_items": AttributeName.QUANTITY,
+    "item_package_quantity": AttributeName.QUANTITY,
+    "pack_size": AttributeName.QUANTITY,
+    # Explicit fallback.
+    "other": AttributeName.OTHERS,
+    "others": AttributeName.OTHERS,
 }
 
 
-# Conservative fallbacks for products whose useful values are not structured
-# in ``details``. Explicit catalog metadata always wins over these matches.
+# Conservative text fallbacks for product fields that are not explicitly
+# structured in ``details``.  These are deliberately small: a false product
+# attribute can hurt Retrieval filtering, 3A matching, and 3B questions at once.
 _PRODUCT_TEXT_VALUE_PATTERNS: dict[AttributeName, re.Pattern[str]] = {
     AttributeName.MATERIAL: re.compile(
         r"\b(cotton|polyester|nylon|leather|wool|spandex|silk|rayon|linen|"
@@ -154,13 +176,20 @@ _PRODUCT_TEXT_VALUE_PATTERNS: dict[AttributeName, re.Pattern[str]] = {
         r"\b(xxs|xs|small|medium|large|xl|xxl|wide|narrow|petite|plus size)\b",
         re.IGNORECASE,
     ),
+    AttributeName.FIT: re.compile(
+        r"\b(slim fit|regular fit|relaxed fit|loose fit|wide|narrow)\b",
+        re.IGNORECASE,
+    ),
     AttributeName.STYLE: re.compile(
-        r"\b(casual|formal|classic|modern|vintage|sporty|slim fit|regular fit|"
-        r"relaxed fit|loose fit|solid|striped|plaid|floral|polka dot)\b",
+        r"\b(casual|formal|classic|modern|vintage|sporty|slim|relaxed)\b",
+        re.IGNORECASE,
+    ),
+    AttributeName.PATTERN: re.compile(
+        r"\b(solid|striped|plaid|floral|polka dot|geometric|animal print)\b",
         re.IGNORECASE,
     ),
     AttributeName.USE_CASE: re.compile(
-        r"\b(hiking|running|gym|winter|outdoor|work)\b",
+        r"\b(hiking|running|gym|winter|outdoor|work|wedding|travel|daily)\b",
         re.IGNORECASE,
     ),
 }
@@ -180,9 +209,7 @@ _SIZE_DETAIL_ONLY_KEYS = frozenset(
         "item_weight",
     }
 )
-_DETAIL_PRESERVING_FIELDS = frozenset(
-    {AttributeName.FEATURE, AttributeName.OTHER}
-)
+
 
 _SPACE_RE = re.compile(r"\s+")
 _NAME_RE = re.compile(r"[^a-z0-9]+")
@@ -229,7 +256,14 @@ def _unique(values: Sequence[str]) -> list[str]:
 
 @dataclass(slots=True)
 class AttributeValue(Mapping[str, Any]):
-    """One stable value shape for text, numeric ranges, and subfields."""
+    """One normalized attribute value supporting text, ranges, and subfields.
+
+    Examples:
+    - color: `values=["black"]`
+    - budget: `minimum=50, maximum=100, unit="USD"`
+    - size: `values=["M"], details={"waist": ["32 inches"]}`
+    - others: `details={"care_instructions": ["hand wash"]}`
+    """
 
     values: list[str] = field(default_factory=list)
     minimum: float | None = None
@@ -256,7 +290,7 @@ class AttributeValue(Mapping[str, Any]):
 
     @classmethod
     def from_raw(cls, value: object) -> AttributeValue:
-        """Normalize common LLM and dataset outputs into ``AttributeValue``."""
+        """Normalize common LLM/dataset outputs into one stable value shape."""
         if isinstance(value, AttributeValue):
             return value.copy()
         if isinstance(value, Mapping):
@@ -341,6 +375,7 @@ class AttributeValue(Mapping[str, Any]):
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Stable JSON shape; `min`/`max` also work with the current reranker."""
         return {
             "values": list(self.values),
             "min": self.minimum,
@@ -363,16 +398,20 @@ AttributeMap: TypeAlias = dict[AttributeName, AttributeValue]
 
 
 def normalize_attribute_name(value: object) -> AttributeName:
-    """Map a catalog/LLM name to one official field; unknown names use OTHER."""
+    """Map dataset/LLM aliases to a canonical name; unknown names become OTHERS."""
     if isinstance(value, AttributeName):
         return value
-    return _ATTRIBUTE_ALIASES.get(_clean_name(value), AttributeName.OTHER)
+    return _ATTRIBUTE_ALIASES.get(_clean_name(value), AttributeName.OTHERS)
 
 
 def normalize_attribute_map(
     raw: Mapping[str | AttributeName, object] | None,
 ) -> AttributeMap:
-    """Normalize constraints while retaining unknown fields under ``other``."""
+    """Normalize hard/soft constraints and preserve unknown fields in `others`.
+
+    Unknown input such as `{"care_instructions": "hand wash"}` becomes:
+    `AttributeName.OTHERS -> details["care_instructions"] = ["hand wash"]`.
+    """
     result: AttributeMap = {}
     if not isinstance(raw, Mapping):
         return result
@@ -380,9 +419,9 @@ def normalize_attribute_map(
     for raw_name, raw_value in raw.items():
         cleaned_name = _clean_name(raw_name)
         name = normalize_attribute_name(raw_name)
-        if name is AttributeName.OTHER:
+        if name is AttributeName.OTHERS:
             current = result.setdefault(name, AttributeValue())
-            if cleaned_name == "other" and isinstance(raw_value, Mapping):
+            if cleaned_name in {"other", "others"} and isinstance(raw_value, Mapping):
                 current.merge(AttributeValue.from_raw({"details": raw_value}))
             elif cleaned_name:
                 current.merge(
@@ -409,10 +448,18 @@ def _merge_product_attribute(
 
 
 def extract_product_attributes(product: Mapping[str, object]) -> AttributeMap:
-    """Derive the official ten-field view from one catalog record."""
+    """Derive canonical product attributes from one raw catalog record.
+
+    Official fields remain the source of truth.  This function creates an
+    internal, shared view for Retrieval, Reranking, and Dialogue without
+    inventing new catalog ground truth.  Unknown ``details`` keys are left in
+    the original ``details`` mapping instead of being duplicated under OTHERS.
+    """
     attributes: AttributeMap = {}
 
-    raw_categories = _as_text_list(product.get("categories", product.get("category")))
+    raw_categories = _as_text_list(
+        product.get("categories", product.get("category"))
+    )
     specific_categories = [
         value for value in raw_categories if value.casefold() not in _GENERIC_CATEGORIES
     ]
@@ -442,23 +489,19 @@ def extract_product_attributes(product: Mapping[str, object]) -> AttributeMap:
         for raw_name, raw_value in details.items():
             cleaned_name = _clean_name(raw_name)
             name = normalize_attribute_name(raw_name)
-
+            if name is AttributeName.OTHERS:
+                continue
             if name is AttributeName.BRAND:
                 if cleaned_name in {"brand", "brand_name"}:
                     explicit_brand.extend(_as_text_list(raw_value))
                 else:
                     manufacturer_brand.extend(_as_text_list(raw_value))
                 continue
-            if name is AttributeName.BUDGET:
+            # The official top-level fields above are more reliable than a
+            # similarly named details entry and must not be replaced.
+            if name in {AttributeName.BUDGET, AttributeName.RATING}:
                 continue
             if name is AttributeName.SIZE and cleaned_name in _SIZE_DETAIL_ONLY_KEYS:
-                _merge_product_attribute(
-                    attributes,
-                    name,
-                    {"details": {cleaned_name: raw_value}},
-                )
-                continue
-            if name in _DETAIL_PRESERVING_FIELDS:
                 _merge_product_attribute(
                     attributes,
                     name,
@@ -472,6 +515,22 @@ def extract_product_attributes(product: Mapping[str, object]) -> AttributeMap:
         brand_source = product.get("brand") or product.get("store")
     _merge_product_attribute(attributes, AttributeName.BRAND, brand_source)
 
+    rating = _as_float(product.get("average_rating"))
+    rating_number = _as_float(product.get("rating_number"))
+    if rating is not None or rating_number is not None:
+        rating_details: dict[str, list[str]] = {}
+        if rating_number is not None:
+            rating_details["rating_number"] = [str(int(rating_number))]
+        attributes[AttributeName.RATING] = AttributeValue(
+            minimum=rating,
+            maximum=rating,
+            unit="stars" if rating is not None else None,
+            details=rating_details,
+        )
+
+    # Explicit catalog metadata wins.  Text inference only fills attributes
+    # that are still missing, using title/category/features rather than the
+    # much noisier long description.
     searchable = " ".join(
         _as_text_list(product.get("title"))
         + _as_text_list(product.get("categories"))
@@ -507,12 +566,11 @@ def product_attribute_text(
     attributes: Mapping[AttributeName, AttributeValue],
     name: AttributeName | str,
 ) -> str:
-    """Flatten one product attribute for lexical constraint matching."""
-    canonical = normalize_attribute_name(name)
-    value = attributes.get(canonical)
+    """Flatten one derived product attribute for lexical constraint matching."""
+    value = attributes.get(normalize_attribute_name(name))
     if value is None:
         return ""
-    parts = product_attribute_values(attributes, canonical)
+    parts = product_attribute_values(attributes, name)
     if value.minimum is not None:
         parts.append(str(value.minimum))
     if value.maximum is not None and value.maximum != value.minimum:
@@ -522,10 +580,8 @@ def product_attribute_text(
     return " ".join(_unique(parts))
 
 
-def attribute_map_to_dict(
-    attributes: Mapping[AttributeName, AttributeValue],
-) -> dict[str, Any]:
-    """Convert an AttributeMap to JSON using only official singular keys."""
+def attribute_map_to_dict(attributes: Mapping[AttributeName, AttributeValue]) -> dict[str, Any]:
+    """Convert an AttributeMap to a JSON-safe mapping with string keys."""
     return {
         name.value: value.to_dict()
         for name, value in attributes.items()
@@ -534,8 +590,14 @@ def attribute_map_to_dict(
 
 
 def to_official_ask_attribute(name: AttributeName | str) -> str:
-    """Return an evaluator-valid name; aliases and unknowns are normalized."""
-    return normalize_attribute_name(name).value
+    """Map internal attributes to the evaluator's allowed ask_attribute values."""
+    canonical = normalize_attribute_name(name)
+    if canonical.value in OFFICIAL_ASK_ATTRIBUTES:
+        return canonical.value
+    return {
+        AttributeName.FIT: "size",
+        AttributeName.PATTERN: "style",
+    }.get(canonical, "other")
 
 
 __all__ = [
