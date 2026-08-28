@@ -158,7 +158,7 @@ def _default_run_id(provenance: Mapping[str, Any]) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     git_data = provenance.get("git")
     short_commit = git_data.get("short_commit", "unknown") if isinstance(git_data, Mapping) else "unknown"
-    suffix = "-dirty" if isinstance(git_data, Mapping) and git_data.get("dirty") else ""
+    suffix = "-dirty" if isinstance(git_data, Mapping) and git_data.get("source_dirty") else ""
     return f"{timestamp}_{short_commit}{suffix}"
 
 

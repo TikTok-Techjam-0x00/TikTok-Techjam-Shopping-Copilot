@@ -103,6 +103,27 @@ def _display_path(project_root: Path, path: Path) -> str:
         return str(path.resolve())
 
 
+def _status_path(status_line: str) -> str:
+    value = status_line[3:].strip() if len(status_line) > 3 else ""
+    if " -> " in value:
+        value = value.split(" -> ", 1)[1]
+    return value.strip('"').replace("\\", "/")
+
+
+def _is_component_source(path: str) -> bool:
+    normalized = path.rstrip("/")
+    entries = [entry.replace("\\", "/").rstrip("/") for values in COMPONENT_PATHS.values() for entry in values]
+    belongs_to_component = any(
+        normalized == entry or normalized.startswith(entry + "/")
+        for entry in entries
+    )
+    if not belongs_to_component:
+        return False
+    if path.endswith("/"):
+        return True
+    return Path(normalized).suffix.casefold() in {".py", ".json", ".toml", ".yaml", ".yml"}
+
+
 def collect_provenance(
     project_root: str | Path,
     *,
@@ -119,6 +140,7 @@ def collect_provenance(
     commit = _git(root, "rev-parse", "HEAD") or "unknown"
     status_text = _git(root, "status", "--porcelain=v1")
     dirty_files = status_text.splitlines() if status_text else []
+    source_dirty_files = [line for line in dirty_files if _is_component_source(_status_path(line))]
     diff = _git(root, "diff", "--binary", "HEAD") or ""
     remote = _git(root, "remote", "get-url", "origin")
 
@@ -131,6 +153,8 @@ def collect_provenance(
             "remote": remote,
             "dirty": bool(dirty_files),
             "dirty_files": dirty_files,
+            "source_dirty": bool(source_dirty_files),
+            "source_dirty_files": source_dirty_files,
             "tracked_diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
         },
         "component_versions": {
