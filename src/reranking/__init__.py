@@ -12,6 +12,15 @@ from ..item import (
     item,
     reranked_candidate,
 )
+from .constraint_matcher import (
+    CandidateConstraintMatches,
+    ConstraintMatch,
+    ConstraintMatcher,
+    ConstraintMatcherConfig,
+    MatchStatus,
+    MultiValuePolicy,
+    match_constraint,
+)
 from .reranker import SimpleReranker, recommendations_from_ranking, rerank
 
 __all__ = [
@@ -25,6 +34,13 @@ __all__ = [
     "reranked_candidate",
     "candidates_100",
     "candidates_10",
+    "MatchStatus",
+    "MultiValuePolicy",
+    "ConstraintMatch",
+    "CandidateConstraintMatches",
+    "ConstraintMatcherConfig",
+    "ConstraintMatcher",
+    "match_constraint",
     "SimpleReranker",
     "rerank",
     "recommendations_from_ranking",

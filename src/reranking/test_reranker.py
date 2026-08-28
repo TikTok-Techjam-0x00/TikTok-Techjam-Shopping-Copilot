@@ -160,6 +160,42 @@ class SimpleRerankerTest(unittest.TestCase):
         self.assertIn("material", ranked[0].matched)
         self.assertNotIn("material:not_matched", ranked[0].violation)
 
+    def test_missing_hard_attribute_is_unknown_not_a_violation(self) -> None:
+        state = MockShoppingState(
+            session_id="missing-metadata",
+            user_profile={},
+            user_message="I want mesh shoes.",
+            turn=2,
+            intent="buying",
+            hard_constraint=normalize_attribute_map({"material": "mesh"}),
+            soft_constraint={},
+            no_prefernce=[],
+        )
+        candidate = Candidate(
+            item=Item.from_dict(
+                {"parent_asin": "UNKNOWN", "title": "Everyday shoes"}
+            ),
+            retrieval_score=1.0,
+        )
+        ranked = rerank(state, [candidate])
+        self.assertNotIn("material", ranked[0].matched)
+        self.assertNotIn("material:not_matched", ranked[0].violation)
+
+    def test_rejected_value_match_is_exposed_as_a_violation(self) -> None:
+        state = {
+            "session_id": "rejected-material",
+            "user_profile": {},
+            "user_message": "No leather.",
+            "turn": 2,
+            "intent": "buying",
+            "hard_constraint": {},
+            "soft_constraint": {},
+            "no_prefernce": [],
+            "rejected_values": normalize_attribute_map({"material": "leather"}),
+        }
+        ranked = rerank(state, [CANDIDATES_100[0]])
+        self.assertIn("material:rejected:leather", ranked[0].violation)
+
     def test_output_is_reranked_candidate_list(self) -> None:
         candidates_10 = rerank(SHOPPING_STATE, CANDIDATES_100)
         self.assertTrue(all(isinstance(value, RankedCandidate) for value in candidates_10))

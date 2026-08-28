@@ -11,7 +11,6 @@ Cross-Encoder, LambdaMART model, or a better hand-tuned scoring function.
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -21,9 +20,13 @@ from ..attribute import (
     AttributeMap,
     AttributeName,
     AttributeValue,
-    product_attribute_text,
 )
 from ..item import Candidate, Candidates10, Item, RankedCandidate
+from .constraint_matcher import (
+    ConstraintMatch,
+    ConstraintMatcher,
+    MatchStatus,
+)
 
 
 ATTRIBUTE_ORDER = (
@@ -39,7 +42,7 @@ ATTRIBUTE_ORDER = (
 )
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
-PRICE_RE = re.compile(r"\d+(?:\.\d+)?")
+CONSTRAINT_MATCHER = ConstraintMatcher()
 
 
 class ShoppingStateProtocol(Protocol):
@@ -88,19 +91,6 @@ def _text(value: object) -> str:
 
 def _tokens(value: object) -> set[str]:
     return {token.lower() for token in TOKEN_RE.findall(_text(value)) if len(token) > 1}
-
-
-def _numeric(value: object) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-        return number if math.isfinite(number) else None
-    if isinstance(value, str):
-        match = PRICE_RE.search(value.replace(",", ""))
-        if match:
-            return float(match.group())
-    return None
 
 
 def _rank_fallback(index: int) -> float:
@@ -206,81 +196,6 @@ def _shopping_intent(shopping_state: ShoppingStateInput) -> str:
     return value
 
 
-def _detail_value(product: Mapping[str, Any], attribute: str) -> object:
-    details = product.get("details")
-    if not isinstance(details, Mapping):
-        return None
-    wanted = attribute.casefold().replace("_", " ")
-    for key, value in details.items():
-        if str(key).casefold().replace("_", " ") == wanted:
-            return value
-    return None
-
-
-def _attribute_text(product: Mapping[str, Any], attribute: str) -> str:
-    derived = getattr(product, "attributes", None)
-    if isinstance(derived, Mapping):
-        derived_text = product_attribute_text(derived, attribute)
-        if derived_text:
-            return derived_text
-
-    explicit = product.get(attribute)
-    detail = _detail_value(product, attribute)
-    if attribute == "category":
-        explicit = product.get("categories") or explicit
-    elif attribute == "brand":
-        explicit = product.get("store") or _detail_value(product, "brand") or explicit
-    elif attribute == "feature":
-        explicit = product.get("features") or explicit
-
-    common = {
-        "title": product.get("title"),
-        "categories": product.get("categories"),
-        "features": product.get("features"),
-        "description": product.get("description"),
-    }
-    return _text([explicit, detail, common])
-
-
-def _match_ratio(requested: object, product_text: str) -> float:
-    requested_tokens = _tokens(requested)
-    if not requested_tokens:
-        return 0.0
-    product_tokens = _tokens(product_text)
-    return len(requested_tokens & product_tokens) / len(requested_tokens)
-
-
-def _budget_bounds(value: object) -> tuple[float | None, float | None]:
-    if isinstance(value, Mapping):
-        minimum = _numeric(value.get("min") if "min" in value else value.get("price_min"))
-        maximum = _numeric(value.get("max") if "max" in value else value.get("price_max"))
-        return minimum, maximum
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return None, float(value)
-    if isinstance(value, str):
-        numbers = [float(item) for item in PRICE_RE.findall(value.replace(",", ""))]
-        lowered = value.lower()
-        if len(numbers) >= 2:
-            return min(numbers[0], numbers[1]), max(numbers[0], numbers[1])
-        if numbers and any(word in lowered for word in ("over", "above", "minimum", "at least")):
-            return numbers[0], None
-        if numbers:
-            return None, numbers[0]
-    return None, None
-
-
-def _budget_match(product: Mapping[str, Any], requested: object) -> tuple[bool, str | None]:
-    price = _numeric(product.get("price"))
-    minimum, maximum = _budget_bounds(requested)
-    if price is None or (minimum is None and maximum is None):
-        return False, None
-    if minimum is not None and price < minimum:
-        return False, "budget:below_minimum"
-    if maximum is not None and price > maximum:
-        return False, "budget:above_maximum"
-    return True, None
-
-
 def _profile_match_ratio(product: Mapping[str, Any], user_profile: Mapping[str, Any]) -> float:
     tags = user_profile.get("preference_tags")
     if not _is_sequence(tags) or not tags:
@@ -305,6 +220,21 @@ def _ordered_unique(values: Sequence[str]) -> list[str]:
     return sorted(set(values), key=lambda value: (order.get(value, len(order)), value))
 
 
+def _hard_violation_label(match: ConstraintMatch) -> str:
+    if match.attribute is AttributeName.BUDGET:
+        evidence = " ".join(match.evidence)
+        if "below minimum" in evidence:
+            return "budget:below_minimum"
+        if "above maximum" in evidence:
+            return "budget:above_maximum"
+    return f"{match.attribute.value}:not_matched"
+
+
+def _rejected_violation_label(match: ConstraintMatch) -> str:
+    requested = " ".join(match.requested_values)[:40]
+    return f"{match.attribute.value}:rejected:{requested}"
+
+
 def _score_candidate(
     candidate: _PreparedCandidate,
     hard: Mapping[str, Any],
@@ -319,41 +249,38 @@ def _score_candidate(
     hard_match_total = 0.0
     soft_match_total = 0.0
 
-    for attribute, requested in hard.items():
-        if attribute == "budget":
-            is_match, violation = _budget_match(candidate.product, requested)
-            if is_match:
-                matched.append(attribute)
-                hard_match_total += 1.0
-            elif violation:
-                violations.append(violation)
-            continue
-        ratio = _match_ratio(requested, _attribute_text(candidate.product, attribute))
-        if ratio >= 0.6:
-            matched.append(attribute)
-            hard_match_total += ratio
-        else:
-            violations.append(f"{attribute}:not_matched")
+    constraint_matches = CONSTRAINT_MATCHER.match_candidate(
+        candidate.product,
+        hard=hard,
+        soft=soft,
+        rejected=rejected,
+    )
+    for match in constraint_matches.hard:
+        hard_match_total += match.score
+        if match.status is MatchStatus.SATISFIED:
+            matched.append(match.attribute.value)
+        elif match.status is MatchStatus.VIOLATED:
+            violations.append(_hard_violation_label(match))
 
-    for attribute, requested in soft.items():
-        if attribute == "budget":
-            is_match, _ = _budget_match(candidate.product, requested)
-            ratio = 1.0 if is_match else 0.0
-        else:
-            ratio = _match_ratio(requested, _attribute_text(candidate.product, attribute))
-        if ratio > 0:
-            matched.append(attribute)
-            soft_match_total += ratio
+    for match in constraint_matches.soft:
+        soft_match_total += match.score
+        if match.status is MatchStatus.SATISFIED:
+            matched.append(match.attribute.value)
 
-    for attribute, rejected_values in rejected.items():
-        values = rejected_values if _is_sequence(rejected_values) else [rejected_values]
-        product_text = _attribute_text(candidate.product, attribute)
-        for rejected_value in values:
-            if _match_ratio(rejected_value, product_text) >= 0.8:
-                violations.append(f"{attribute}:rejected:{_text(rejected_value)[:40]}")
+    for match in constraint_matches.rejected:
+        if match.status is MatchStatus.VIOLATED:
+            violations.append(_rejected_violation_label(match))
 
-    hard_ratio = hard_match_total / len(hard) if hard else 0.0
-    soft_ratio = soft_match_total / len(soft) if soft else 0.0
+    hard_ratio = (
+        hard_match_total / len(constraint_matches.hard)
+        if constraint_matches.hard
+        else 0.0
+    )
+    soft_ratio = (
+        soft_match_total / len(constraint_matches.soft)
+        if constraint_matches.soft
+        else 0.0
+    )
     profile_ratio = _profile_match_ratio(candidate.product, user_profile)
     # A stated rejection or hard-constraint mismatch should dominate a small
     # retrieval-score advantage. Keep violating candidates for diagnostics, but

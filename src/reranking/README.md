@@ -299,6 +299,7 @@ candidates_10 = rerank(
 | `hard_constraint` | 模块 2 提取 | 必须满足的属性和值 | 是 |
 | `soft_constraint` | 模块 2 提取 | 满足则加分的偏好 | 是 |
 | `no_prefernce` | 模块 2 提取 | 用户明确不关心的属性名 | 是，排除对应条件 |
+| `rejected_values` | 模块 2 提取 | 用户明确排除的属性值 | 是，命中则标记违规 |
 
 示例：
 
@@ -326,6 +327,9 @@ shopping_state.soft_constraint = normalize_attribute_map({
     "feature": ["lightweight", "comfortable"],
 })
 shopping_state.no_prefernce = [AttributeName.BRAND]
+shopping_state.rejected_values = normalize_attribute_map({
+    "material": "leather",
+})
 ```
 
 注意：团队当前接口使用 `no_prefernce` 这个拼写。Reranking 也兼容
@@ -442,7 +446,69 @@ recommendations = recommendations_from_ranking(candidates_10)
 转换函数从 `RankedCandidate.item.parent_asin` 读取 ID，并过滤空值和重复值。
 官方只评分前 10 个有效唯一 ID。
 
-## 6. 当前占位排序
+## 6. Constraint Matcher 与当前排序
+
+`constraint_matcher.py` 已替换原先所有属性共用的 token-overlap 判断。单条约束
+的正式内部输出为：
+
+```python
+ConstraintMatch(
+    attribute=AttributeName.MATERIAL,
+    status=MatchStatus.SATISFIED,
+    score=1.0,
+    requested_values=["mesh"],
+    observed_values=["Mesh"],
+    evidence=["requested 'mesh' matched observed 'Mesh' (1.00)"],
+)
+```
+
+三种状态的含义：
+
+| 状态 | 含义 | 当前排序处理 |
+| --- | --- | --- |
+| `SATISFIED` | 商品信息明确满足约束 | 计入 hard/soft 匹配分 |
+| `UNKNOWN` | 商品信息缺失，或只能确认部分开放型要求 | 不记为违规，保留候选 |
+| `VIOLATED` | 已知商品值与封闭型约束冲突，或命中 rejected value | 写入 `violation` 并施加惩罚 |
+
+调用单条匹配：
+
+```python
+from src.reranking import match_constraint
+
+result = match_constraint(
+    product,
+    AttributeName.BUDGET,
+    AttributeValue(maximum=100, unit="USD"),
+)
+```
+
+调用完整候选匹配：
+
+```python
+matcher = ConstraintMatcher()
+matches = matcher.match_candidate(
+    product,
+    hard=shopping_state.hard_constraint,
+    soft=shopping_state.soft_constraint,
+    rejected=shopping_state.rejected_values,
+)
+```
+
+第一版匹配规则：
+
+- `budget` 使用数值上下界；商品缺少价格时返回 `UNKNOWN`。
+- `category/material/color/size/style/brand` 属于封闭型属性：商品已有明确值但不匹配
+  才返回 `VIOLATED`。
+- `feature/use_case/other` 属于开放型属性：未找到值默认返回 `UNKNOWN`，因为商品
+  metadata 很可能不完整。
+- `category/material/color/size/style/brand` 的多个请求值默认按 `ANY` 解释。
+- `feature/use_case/other` 默认按 `ALL` 解释；可通过
+  `ConstraintMatcherConfig` 切换为 `ANY` 做消融实验。
+- rejected value 使用反向语义：发现被拒绝值为 `VIOLATED`，明确存在其他值为
+  `SATISFIED`，缺少信息仍为 `UNKNOWN`。
+- 结构化属性优先；只有结构化信息不足时才使用与该属性对应的商品文本 fallback。
+
+当前 scorer 的融合权重暂时保持不变，以隔离 Constraint Matcher 本身带来的变化。
 
 共同信号：
 
@@ -472,13 +538,12 @@ recommendations = recommendations_from_ranking(candidates_10)
 - 0.75 * violation penalty
 ```
 
-普通属性暂时使用英文 token 重合率。预算支持 `min/max`、数字和简单英文区间。
-这只是占位实现，后续应重点优化：
+当前仍属于可解释的规则基线，后续应重点优化：
 
 - 语义匹配、同义词和词形变化。
 - Cross-Encoder 或 Learning-to-Rank。
 - browsing 的 MMR/类目覆盖等多样性策略。
-- 不同属性的专用匹配器。
+- 属性同义词表、尺寸单位换算和更细的类型专用 matcher。
 - 更细粒度的违规严重度和可解释分项。
 - 使用 public sessions 调整权重并做消融实验。
 
