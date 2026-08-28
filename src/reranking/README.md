@@ -3,8 +3,8 @@
 本目录负责将 Retrieval 返回的最多 100 个候选，结合模块 2 维护的
 `shopping_state` 重新排序，并输出最多 10 个 `RankedCandidate`。
 
-当前算法是可运行的占位基线。共享对象和模块边界已经固定，后续可以在不改变
-上下游接口的前提下替换为 Cross-Encoder、Learning-to-Rank、MMR 或更强规则。
+当前算法是可运行、可解释的规则基线。共享对象和模块边界已经固定，后续可以在
+不改变上下游接口的前提下替换为 Cross-Encoder、Learning-to-Rank 或 MMR。
 
 ## 1. 数据流
 
@@ -35,7 +35,10 @@ output candidates_100  --------------> shopping_state + candidates_100
 
 - `src/item.py`：跨模块共享的数据类。
 - `src/attribute.py`：hard/soft constraint 共用的标准属性契约。
-- `src/reranking/reranker.py`：候选清洗、占位打分、排序和官方格式转换。
+- `src/reranking/constraint_matcher.py`：属性专用三态约束匹配。
+- `src/reranking/feature_extractor.py`：将匹配结果转换为候选排序特征。
+- `src/reranking/scorers/rule_scorer.py`：S1 Rule/Fuzzy 相关度基线。
+- `src/reranking/reranker.py`：候选清洗、策略融合、排序和官方格式转换。
 - `src/reranking/test_reranker.py`：对象契约及 Reranking 测试。
 - `examples/reranker_demo.py`：完整模拟输入输出。
 
@@ -528,7 +531,56 @@ feasibility_tier / soft_penalty_adjustment
 `constraint_matches` 原样保留在 `CandidateSignals` 中。因此更换权重、融合方式或
 排序策略时不需要重新执行商品匹配，诊断证据也不会丢失。
 
-### 6.2 Buying：Feasibility Tier
+### 6.2 S1：Rule/Fuzzy Relevance Scorer
+
+`scorers/rule_scorer.py` 是完全本地、无模型和无新增第三方依赖的 S1 基线。
+输入为当前有效的 hard/soft constraints 和一个 `Item`，输出统一的：
+
+```python
+RelevanceScore(
+    score=0.86,
+    attribute_scores={AttributeName.CATEGORY: 0.90},
+    phrase_score=0.80,
+    token_overlap_score=0.92,
+    fuzzy_score=0.84,
+    category_score=0.90,
+    numeric_score=1.00,
+    matched_terms=["running shoes", "mesh"],
+    evidence=[...],
+)
+```
+
+当前计算包含：
+
+- phrase exact/substring match；
+- token overlap；
+- 基于标准库 `SequenceMatcher` 的 fuzzy similarity 和 typo rescue；
+- 小型属性同义词归一化，例如 `water resistant -> waterproof`；
+- category 层级与 title 的组合匹配；
+- budget 数值范围与超界距离；
+- hard constraint 权重 2、soft constraint 权重 1；
+- 属性级分数与全局商品文本分数融合。
+
+Scorer 不读取 rejected values，它们继续由 Constraint Matcher 独立处理。默认只读
+State 中当前有效的 hard/soft constraints；只有两者都为空时，才使用当前
+`user_message` 作为 fallback，不读取完整 history。
+
+调用示例：
+
+```python
+scorer = RuleFuzzyScorer()
+relevance = scorer.score(
+    product,
+    hard_constraints=shopping_state.hard_constraint,
+    soft_constraints=shopping_state.soft_constraint,
+    query_text=shopping_state.user_message,
+)
+```
+
+`relevance.score` 写入 `CandidateSignals.semantic_score`。统一接口为
+`RelevanceScorer`，后续的 Cross-Encoder 可以直接替换 S1。
+
+### 6.3 Buying：Feasibility Tier
 
 Buying 先按可行性分层，再在同一层内按当前相关度分数排序：
 
@@ -548,21 +600,23 @@ Tier 3：命中任意 rejected value
 当前同层相关度为：
 
 ```text
-0.55 * retrieval
-+ 0.25 * hard match score
-+ 0.15 * soft match score
+0.20 * retrieval
++ 0.35 * S1 semantic relevance
++ 0.30 * hard match score
++ 0.10 * soft match score
 + 0.05 * profile match
 ```
 
 这保证低 Retrieval 分但完整满足 hard 的商品，仍排在高 Retrieval 但 hard 未知或
 明确冲突的商品前面。Tier 只改变顺序，不删除候选。
 
-### 6.3 Browsing：Soft Penalty
+### 6.4 Browsing：Soft Penalty
 
 Browsing 不使用 Tier，也不删除违反约束的候选，而是使用分数调整：
 
 ```text
-0.90 * retrieval
+0.60 * retrieval
++ 0.30 * S1 semantic relevance
 + 0.10 * profile match
 + soft_penalty_adjustment
 ```
@@ -649,6 +703,8 @@ Reranking 测试覆盖：
 - BM25、Dense、Retrieval 分数是否保留到输出。
 - 硬约束能否改变 Retrieval 原始顺序。
 - CandidateSignals 的计数、匹配分、Soft Penalty 和 Tier 是否正确。
+- S1 的 phrase/token/fuzzy/synonym/category/budget 分项是否正确。
+- S1 是否能在同一 Buying Tier 内以及 Browsing 总分中改变顺序。
 - Buying 是否严格先按 Tier、再按同层相关度排序。
 - Browsing 是否只调分、不删除候选，也不意外启用 Tier。
 - 输出是否为 `list[RankedCandidate]` 且名次连续。

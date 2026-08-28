@@ -29,6 +29,7 @@ from .constraint_matcher import (
     MatchStatus,
 )
 from .feature_extractor import CandidateFeatureExtractor, CandidateSignals
+from .scorers import RelevanceScorer, RuleFuzzyScorer
 
 
 ATTRIBUTE_ORDER = (
@@ -60,12 +61,14 @@ class RerankerStrategyConfig:
     browsing_strategy: HardConstraintStrategy = HardConstraintStrategy.SOFT_PENALTY
     buying_strategy: HardConstraintStrategy = HardConstraintStrategy.FEASIBILITY_TIER
 
-    browsing_retrieval_weight: float = 0.90
+    browsing_retrieval_weight: float = 0.60
+    browsing_semantic_weight: float = 0.30
     browsing_profile_weight: float = 0.10
 
-    buying_retrieval_weight: float = 0.55
-    buying_hard_match_weight: float = 0.25
-    buying_soft_match_weight: float = 0.15
+    buying_retrieval_weight: float = 0.20
+    buying_semantic_weight: float = 0.35
+    buying_hard_match_weight: float = 0.30
+    buying_soft_match_weight: float = 0.10
     buying_profile_weight: float = 0.05
 
     def strategy_for(self, intent: str) -> HardConstraintStrategy:
@@ -292,15 +295,18 @@ def _score_signals(
     strategy: HardConstraintStrategy,
     config: RerankerStrategyConfig,
 ) -> float:
+    semantic_score = signals.semantic_score or 0.0
     if strategy is HardConstraintStrategy.SOFT_PENALTY:
         return (
             config.browsing_retrieval_weight
             * signals.normalized_retrieval_score
+            + config.browsing_semantic_weight * semantic_score
             + config.browsing_profile_weight * signals.profile_match_score
             + signals.soft_penalty_adjustment
         )
     return (
         config.buying_retrieval_weight * signals.normalized_retrieval_score
+        + config.buying_semantic_weight * semantic_score
         + config.buying_hard_match_weight * signals.hard_match_score
         + config.buying_soft_match_weight * signals.soft_match_score
         + config.buying_profile_weight * signals.profile_match_score
@@ -315,10 +321,12 @@ class SimpleReranker:
         *,
         constraint_matcher: ConstraintMatcher | None = None,
         feature_extractor: CandidateFeatureExtractor | None = None,
+        relevance_scorer: RelevanceScorer | None = None,
         strategy_config: RerankerStrategyConfig | None = None,
     ) -> None:
         self.constraint_matcher = constraint_matcher or ConstraintMatcher()
         self.feature_extractor = feature_extractor or CandidateFeatureExtractor()
+        self.relevance_scorer = relevance_scorer or RuleFuzzyScorer()
         self.strategy_config = strategy_config or RerankerStrategyConfig()
 
     def rerank(
@@ -337,6 +345,7 @@ class SimpleReranker:
         rejected = _constraint_map(_state_value(shopping_state, "rejected_values"))
         embedded_profile = _state_value(shopping_state, "user_profile")
         profile = embedded_profile if isinstance(embedded_profile, Mapping) else {}
+        query_text = str(_state_value(shopping_state, "user_message", "") or "")
 
         scored: list[
             tuple[float, _PreparedCandidate, CandidateSignals, list[str], list[str]]
@@ -348,11 +357,18 @@ class SimpleReranker:
                 soft=soft,
                 rejected=rejected,
             )
+            relevance = self.relevance_scorer.score(
+                candidate.product,
+                hard_constraints=hard,
+                soft_constraints=soft,
+                query_text=query_text,
+            )
             signals = self.feature_extractor.extract(
                 candidate.source,
                 constraint_matches,
                 normalized_retrieval_score=candidate.retrieval_score,
                 profile_match_score=_profile_match_ratio(candidate.product, profile),
+                semantic_score=relevance.score,
             )
             score = _score_signals(signals, strategy, self.strategy_config)
             matched, violations = _matched_and_violations(signals)

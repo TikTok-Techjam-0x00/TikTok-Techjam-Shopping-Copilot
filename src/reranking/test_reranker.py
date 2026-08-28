@@ -148,6 +148,75 @@ class SimpleRerankerTest(unittest.TestCase):
             HardConstraintStrategy.FEASIBILITY_TIER,
         )
 
+    def test_s1_semantic_score_changes_order_within_one_buying_tier(self) -> None:
+        state = {
+            "intent": "buying",
+            "hard_constraint": {},
+            "soft_constraint": {},
+            "rejected_values": {},
+            "user_profile": {},
+            "user_message": "black lightweight mesh running shoes",
+        }
+        candidates = [
+            Candidate(
+                item=Item.from_dict(
+                    {"parent_asin": "UNRELATED", "title": "Formal red leather handbag"}
+                ),
+                retrieval_score=1.0,
+            ),
+            Candidate(
+                item=Item.from_dict(
+                    {
+                        "parent_asin": "RELEVANT",
+                        "title": "Black Lightweight Mesh Running Shoes",
+                    }
+                ),
+                retrieval_score=0.1,
+            ),
+        ]
+        ranked = rerank(state, candidates)
+        self.assertEqual(
+            [candidate.parent_asin for candidate in ranked],
+            ["RELEVANT", "UNRELATED"],
+        )
+
+    def test_browsing_can_use_s1_as_its_relevance_signal(self) -> None:
+        state = {
+            "intent": "browsing",
+            "hard_constraint": {},
+            "soft_constraint": {},
+            "rejected_values": {},
+            "user_profile": {},
+            "user_message": "waterproof trail shoes",
+        }
+        candidates = [
+            Candidate(
+                item=Item.from_dict(
+                    {"parent_asin": "UNRELATED", "title": "Formal handbag"}
+                ),
+                retrieval_score=1.0,
+            ),
+            Candidate(
+                item=Item.from_dict(
+                    {
+                        "parent_asin": "RELEVANT",
+                        "title": "Waterproof Trail Shoes",
+                    }
+                ),
+                retrieval_score=0.1,
+            ),
+        ]
+        config = RerankerStrategyConfig(
+            browsing_retrieval_weight=0.0,
+            browsing_semantic_weight=1.0,
+            browsing_profile_weight=0.0,
+        )
+        ranked = SimpleReranker(strategy_config=config).rerank(state, candidates)
+        self.assertEqual(
+            [candidate.parent_asin for candidate in ranked],
+            ["RELEVANT", "UNRELATED"],
+        )
+
     def test_buying_feasibility_tier_precedes_retrieval_relevance(self) -> None:
         state = {
             "intent": "buying",

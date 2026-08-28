@@ -386,6 +386,21 @@ signals 中，但不把完整诊断塞入官方 response。
 
 优点是快速、确定、可解释，并且可以作为所有模型方案的 fallback。
 
+当前实现位于 `scorers/rule_scorer.py`，使用统一接口：
+
+```python
+relevance = scorer.score(
+    product,
+    hard_constraints=shopping_state.hard_constraint,
+    soft_constraints=shopping_state.soft_constraint,
+    query_text=shopping_state.user_message,
+)
+```
+
+输出 `RelevanceScore`，包括总分、attribute scores、phrase/token/fuzzy、category、
+numeric、matched terms 和 evidence。S1 不读取 rejected values；只有 State 没有
+结构化正向约束时才使用当前消息 fallback，避免旧 history 污染排序。
+
 ### 8.2 S2：MiniLM Cross-Encoder
 
 第一个建议实验的神经 reranker：
@@ -476,13 +491,14 @@ profile    0.05
 Browsing 初始对照：
 
 ```text
-retrieval  0.30
+retrieval  0.60
 semantic   0.30
-hard       0.15
-soft       0.15
 profile    0.10
++ H1 soft_penalty_adjustment
 ```
 
+Browsing 的 hard/soft/rejected 已通过 H1 adjustment 进入分数，因此不在线性部分
+重复计算。Buying 则先按 feasibility tier，再在同层使用上述 Buying 融合权重。
 这些数值只是实验起点，不是固定结论。
 
 ### 9.2 F2：RRF

@@ -27,6 +27,13 @@ from .feature_extractor import (
     ConstraintFeatureWeights,
     extract_candidate_features,
 )
+from .scorers import (
+    RelevanceScore,
+    RelevanceScorer,
+    RuleFuzzyScorer,
+    RuleFuzzyScorerConfig,
+    score_rule_relevance,
+)
 from .reranker import (
     HardConstraintStrategy,
     RerankerStrategyConfig,
@@ -57,6 +64,11 @@ __all__ = [
     "CandidateSignals",
     "CandidateFeatureExtractor",
     "extract_candidate_features",
+    "RelevanceScore",
+    "RelevanceScorer",
+    "RuleFuzzyScorerConfig",
+    "RuleFuzzyScorer",
+    "score_rule_relevance",
     "HardConstraintStrategy",
     "RerankerStrategyConfig",
     "SimpleReranker",
