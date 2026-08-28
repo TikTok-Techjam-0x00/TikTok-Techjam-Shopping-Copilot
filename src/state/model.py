@@ -86,6 +86,9 @@ class ShoppingState:
     intent_transitions: list[dict[str, Any]] = field(default_factory=list)
     boundary_detected: bool = False
     boundary_attributes: list[AttributeName] = field(default_factory=list)
+    semantic_fallback_used: bool = False
+    semantic_fallback_count: int = 0
+    semantic_fallback_reasons: list[str] = field(default_factory=list)
 
     def _replace(self, target: AttributeMap, name: AttributeName, value: AttributeValue) -> None:
         target[name] = value.copy()
@@ -165,6 +168,9 @@ class ShoppingState:
             "intent_transitions": [dict(value) for value in self.intent_transitions],
             "boundary_detected": self.boundary_detected,
             "boundary_attributes": [name.value for name in self.boundary_attributes],
+            "semantic_fallback_used": self.semantic_fallback_used,
+            "semantic_fallback_count": self.semantic_fallback_count,
+            "semantic_fallback_reasons": list(self.semantic_fallback_reasons),
         }
 
     def copy(self) -> ShoppingState:
@@ -185,4 +191,7 @@ class ShoppingState:
             intent_transitions=[dict(value) for value in self.intent_transitions],
             boundary_detected=self.boundary_detected,
             boundary_attributes=list(self.boundary_attributes),
+            semantic_fallback_used=self.semantic_fallback_used,
+            semantic_fallback_count=self.semantic_fallback_count,
+            semantic_fallback_reasons=list(self.semantic_fallback_reasons),
         )

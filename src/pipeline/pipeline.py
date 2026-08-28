@@ -7,6 +7,8 @@ from src.reranking import SimpleReranker, recommendations_from_ranking
 from src.retrieval import Retriever
 from src.state import (
     ShoppingState,
+    SemanticPolicy,
+    SemanticResolver,
     create_state,
     retrieval_query,
     sanitize_retrieval_text,
@@ -17,10 +19,18 @@ from src.state import (
 class Pipeline:
     """Coordinate State, Retrieval, Reranking, and Dialogue."""
 
-    def __init__(self, catalog_path: str | Path) -> None:
+    def __init__(
+        self,
+        catalog_path: str | Path,
+        *,
+        semantic_resolver: SemanticResolver | None = None,
+        semantic_policy: SemanticPolicy | None = None,
+    ) -> None:
         self.catalog_path = Path(catalog_path)
         self.retriever = Retriever.bm25(str(self.catalog_path))
         self.reranker = SimpleReranker()
+        self.semantic_resolver = semantic_resolver
+        self.semantic_policy = semantic_policy
         self._sessions: dict[str, ShoppingState] = {}
         self._last_asked: dict[str, str | None] = {}
 
@@ -42,6 +52,8 @@ class Pipeline:
             user_message,
             turn=turn,
             asked_attribute=self._last_asked.get(session_id),
+            semantic_resolver=self.semantic_resolver,
+            semantic_policy=self.semantic_policy,
         )
         query = retrieval_query(state) or sanitize_retrieval_text(user_message)
         candidates_100 = self.retriever.retrieve(

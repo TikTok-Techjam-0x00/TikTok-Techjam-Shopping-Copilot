@@ -6,12 +6,29 @@ import unittest
 from pathlib import Path
 
 from starter.agent import Agent
+from src.state import SemanticResolution, StateUpdate
+
+
+class StaticSemanticResolver:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def resolve(self, request: object) -> SemanticResolution:
+        self.call_count += 1
+        return SemanticResolution(
+            StateUpdate.from_raw(
+                intent="buying",
+                hard_constraint={"category": "hiking boots"},
+            ),
+            0.9,
+        )
 
 
 class StatefulAgentTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         catalog = Path(self.temporary_directory.name) / "catalog.jsonl"
+        self.catalog = catalog
         products = [
             {
                 "parent_asin": "RUN1",
@@ -73,6 +90,26 @@ class StatefulAgentTest(unittest.TestCase):
     def test_respond_requires_reset(self) -> None:
         with self.assertRaises(RuntimeError):
             self.agent.respond("missing", "I want shoes", 1, 10)
+
+    def test_agent_passes_ambiguous_context_to_semantic_resolver(self) -> None:
+        resolver = StaticSemanticResolver()
+        agent = Agent(self.catalog, semantic_resolver=resolver)
+        agent.reset("semantic", {})
+
+        response = agent.respond(
+            "semantic",
+            "Something like the previous one, but suitable for hiking.",
+            1,
+            10,
+        )
+        state = agent.get_state("semantic")
+
+        self.assertEqual(resolver.call_count, 1)
+        self.assertTrue(state["semantic_fallback_used"])
+        self.assertEqual(
+            response["recommendations"][0]["parent_asin"],
+            "HIKE1",
+        )
 
 
 if __name__ == "__main__":

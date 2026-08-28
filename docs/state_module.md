@@ -39,6 +39,45 @@ The object directly implements the protocols consumed by `src/retrieval`,
 `src/reranking`, and `src/dialogue`. Compatibility imports remain in `starter/`
 for callers that used the earlier module locations.
 
+## Rule-first semantic fallback
+
+The state manager always runs deterministic rules first. Rules own explicit,
+high-confidence facts such as intent keywords, category phrases, budget, color,
+material, size, use case, negative values, no-preference replies, and explicit
+overrides.
+
+An optional semantic resolver is considered only when the rule result indicates
+one or more of these conditions:
+
+- low intent confidence with no extracted attributes;
+- an override that rules could not resolve;
+- a pronoun or reference that depends on earlier context;
+- an unresolved comparison such as `more formal` or `similar to the last one`;
+- an unresolved alternative.
+
+```python
+from src.state import CallableSemanticResolver, update_state
+
+resolver = CallableSemanticResolver(call_structured_llm)
+update_state(
+    state,
+    user_message,
+    turn=turn,
+    semantic_resolver=resolver,
+)
+```
+
+The provider callback receives a compact `SemanticRequest` and must return a
+strict mapping with optional `intent`, `hard_constraint`, `soft_constraint`,
+`no_preference`, `rejected_values`, `override`, and `confidence` fields. Its
+output is normalized through the shared `AttributeMap` contract.
+
+Rule-extracted values take precedence when rule and semantic outputs disagree;
+semantic output may fill missing attributes. If the resolver is absent, fails,
+times out, or returns invalid output, the rule result is still committed and the
+pipeline continues. `semantic_fallback_used`, `semantic_fallback_count`, and
+`semantic_fallback_reasons` provide runtime diagnostics.
+
 ## Override behavior
 
 When a user changes category, the new category replaces the old one and stale
