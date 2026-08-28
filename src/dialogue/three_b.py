@@ -12,7 +12,8 @@ from collections import Counter
 from collections.abc import Mapping, MutableMapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, TypedDict
 
-from ..item import Candidate
+from ..attribute import product_attribute_values
+from ..item import Candidate, Item
 
 if TYPE_CHECKING:
     from ..attribute import AttributeMap, AttributeName
@@ -194,10 +195,10 @@ def _retrieval_items(
     return accepted
 
 
-def _product(value: Candidate | Mapping[str, Any]) -> dict[str, Any] | None:
-    """把正式 Candidate.item 或兼容 Mapping 统一成商品字典。"""
+def _product(value: Candidate | Mapping[str, Any]) -> Item | dict[str, Any] | None:
+    """读取正式 Candidate.item；旧 Mapping 只作为兼容输入。"""
     if isinstance(value, Candidate):
-        return value.item.to_dict()
+        return value.item
 
     if not isinstance(value, Mapping):
         return None
@@ -254,6 +255,30 @@ def _constraint_attribute(value: str) -> str:
 
 def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
     """提取候选属性值；这些值只用于判断候选多样性和生成选项。"""
+    # Item 在 catalog 加载时已统一提取属性。预算仍读取原始 price，便于
+    # 转换成离散价格区间；其他属性优先使用共享的派生结果。
+    # 远端3B对 use_case 有更严格的官方六词边界，必须继续走下方专用逻辑。
+    if attribute not in {"budget", "use_case"}:
+        derived = getattr(product, "attributes", None)
+        if isinstance(derived, Mapping):
+            values = product_attribute_values(
+                derived,
+                attribute,
+                include_details=False,
+            )
+            if attribute == "feature":
+                values = [
+                    value
+                    for value in values
+                    if _constraint_attribute(value) == "feature"
+                ]
+            if values:
+                return {
+                    re.sub(r"\s+", " ", value).strip().lower()[:60]
+                    for value in values
+                    if value.strip()
+                }
+
     # 先读取统一 item 顶层字段，再读取 details；固定正则只作为最后兜底。
     detail = _detail_value(product, attribute)
     if attribute == "brand":

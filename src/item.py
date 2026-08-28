@@ -11,6 +11,11 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeAlias
 
+from .attribute import (
+    AttributeMap,
+    extract_product_attributes,
+)
+
 
 DATASET_FIELDS = (
     "parent_asin",
@@ -67,7 +72,7 @@ class _MappingView(Mapping[str, Any]):
 
 @dataclass(slots=True)
 class Item(_MappingView):
-    """One product using exactly the participant-visible catalog fields."""
+    """One product with official catalog fields and internal derived attributes."""
 
     parent_asin: str
     title: str = ""
@@ -79,11 +84,41 @@ class Item(_MappingView):
     average_rating: float | None = None
     rating_number: int | None = None
     store: str | None = None
+    _derived_attributes: AttributeMap | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         self.parent_asin = str(self.parent_asin).strip()
         if not self.parent_asin:
             raise ValueError("parent_asin must not be empty")
+
+    @property
+    def attributes(self) -> AttributeMap:
+        """Lazily derive and cache attributes shared by Retrieval, 3A, and 3B."""
+        if self._derived_attributes is None:
+            self._derived_attributes = extract_product_attributes(
+                {
+                    "title": self.title,
+                    "features": self.features,
+                    "description": self.description,
+                    "price": self.price,
+                    "categories": self.categories,
+                    "details": self.details,
+                    "average_rating": self.average_rating,
+                    "rating_number": self.rating_number,
+                    "store": self.store,
+                }
+            )
+        return self._derived_attributes
+
+    @property
+    def derived_attributes(self) -> AttributeMap:
+        """Explicit alias distinguishing internal attributes from catalog fields."""
+        return self.attributes
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Item:
@@ -104,7 +139,7 @@ class Item(_MappingView):
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Return the original dataset shape, safe for JSON serialization."""
+        """Return only the official dataset shape, safe for JSON serialization."""
         return {
             "parent_asin": self.parent_asin,
             "title": self.title,

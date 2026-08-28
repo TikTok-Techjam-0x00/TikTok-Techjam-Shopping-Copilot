@@ -327,6 +327,29 @@ class AskAttributeSelectorTest(unittest.TestCase):
             {"size"},
         )
 
+    def test_item_uses_shared_detail_aliases(self) -> None:
+        product = Item.from_dict(
+            {
+                "parent_asin": "ALIAS",
+                "details": {"Fabric Type": "Bamboo Viscose"},
+            }
+        )
+        self.assertEqual(_values(product, "material"), {"bamboo viscose"})
+
+    def test_item_attributes_preserve_three_b_attribute_boundaries(self) -> None:
+        product = Item.from_dict(
+            {
+                "parent_asin": "BOUNDARY",
+                "title": "Running shirt",
+                "features": ["100% Cotton", "Color: Black", "Perfect for travel", "Waterproof"],
+            }
+        )
+        self.assertEqual(_values(product, "use_case"), set())
+        self.assertEqual(
+            _values(product, "feature"),
+            {"perfect for travel", "waterproof"},
+        )
+
     def test_missing_details_uses_text_fallback(self) -> None:
         product = {"title": "Black cotton running shirt"}
         self.assertEqual(_values(product, "material"), {"cotton"})

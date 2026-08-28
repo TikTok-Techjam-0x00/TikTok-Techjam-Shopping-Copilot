@@ -9,6 +9,19 @@ catalog.jsonl(.gz) -> Catalog[parent_asin, Item] -> SQLite FTS5
 当前查询 + ShoppingState -> 检索查询 -> BM25 -> list[Candidate]
 ```
 
+每个 `Item` 还提供统一的 `item.attributes` 派生属性，供 Retrieval 后续
+metadata 实验、3A 约束匹配和 3B 候选属性分析共同使用。属性在第一次访问时
+才提取并缓存，因此加载 50,000 个商品和构建 BM25 时不会提前承担全部抽取开销。
+`Item.to_dict()` 仍只返回官方 Catalog 字段。
+
+如需把全部商品属性导出为独立 JSONL，可在项目根目录直接运行：
+
+```powershell
+.\.venv\Scripts\python.exe extract_attributes.py
+```
+
+默认输出 `data/catalog_attributes.jsonl`，该生成文件已被 Git 忽略。
+
 模块的公共调用入口如下：
 
 ```python

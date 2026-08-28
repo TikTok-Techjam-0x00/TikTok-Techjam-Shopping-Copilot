@@ -8,8 +8,10 @@ from src.attribute import (
     AttributeName,
     AttributeValue,
     attribute_map_to_dict,
+    extract_product_attributes,
     normalize_attribute_map,
     normalize_attribute_name,
+    product_attribute_values,
     to_official_ask_attribute,
 )
 
@@ -100,6 +102,66 @@ class AttributeContractTest(unittest.TestCase):
         self.assertEqual(to_official_ask_attribute(AttributeName.PATTERN), "style")
         self.assertEqual(to_official_ask_attribute(AttributeName.TARGET_USER), "other")
         self.assertEqual(to_official_ask_attribute(AttributeName.OTHERS), "other")
+
+    def test_product_attributes_use_catalog_fields_and_detail_aliases(self) -> None:
+        attributes = extract_product_attributes(
+            {
+                "title": "Black trail shoes",
+                "categories": ["Shoes", "Hiking"],
+                "features": ["Waterproof"],
+                "price": 89.5,
+                "store": "Store Fallback",
+                "details": {
+                    "Brand": "Trail Works",
+                    "Fabric Type": "Bamboo Viscose",
+                    "Colour": "Forest Green",
+                    "Department": "Women",
+                    "Care Instructions": "Hand Wash",
+                },
+            }
+        )
+
+        self.assertEqual(attributes[AttributeName.CATEGORY].values, ["Shoes", "Hiking"])
+        self.assertEqual(attributes[AttributeName.MATERIAL].values, ["Bamboo Viscose"])
+        self.assertEqual(attributes[AttributeName.COLOR].values, ["Forest Green"])
+        self.assertEqual(attributes[AttributeName.BRAND].values, ["Trail Works"])
+        self.assertEqual(attributes[AttributeName.BUDGET].minimum, 89.5)
+        self.assertNotIn(AttributeName.OTHERS, attributes)
+
+    def test_product_text_fallback_only_fills_missing_attributes(self) -> None:
+        attributes = extract_product_attributes(
+            {
+                "title": "Black cotton running shirt",
+                "details": {"Color": "Navy"},
+            }
+        )
+        self.assertEqual(attributes[AttributeName.COLOR].values, ["Navy"])
+        self.assertEqual(attributes[AttributeName.MATERIAL].values, ["cotton"])
+        self.assertEqual(attributes[AttributeName.USE_CASE].values, ["running"])
+
+    def test_generic_category_and_package_dimensions_do_not_pollute_options(self) -> None:
+        attributes = extract_product_attributes(
+            {
+                "categories": ["Clothing, Shoes & Jewelry", "Women", "Dresses"],
+                "details": {"Package Dimensions": "10 x 8 x 1 inches"},
+            }
+        )
+        self.assertEqual(
+            attributes[AttributeName.CATEGORY].values,
+            ["Women", "Dresses"],
+        )
+        self.assertEqual(
+            product_attribute_values(
+                attributes,
+                AttributeName.SIZE,
+                include_details=False,
+            ),
+            [],
+        )
+        self.assertEqual(
+            product_attribute_values(attributes, AttributeName.SIZE),
+            ["10 x 8 x 1 inches"],
+        )
 
 
 if __name__ == "__main__":

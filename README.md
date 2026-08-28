@@ -131,6 +131,22 @@ AttributeValue(
 - `unit` stores the currency or measurement unit.
 - `details` stores structured subfields such as product dimensions.
 
+Each catalog `Item` also exposes a lazily computed `item.attributes` mapping.
+It derives canonical product attributes from official catalog fields and caches
+the result on first use. `item.to_dict()` intentionally continues to return only
+the official catalog fields, so evaluator and serialization contracts do not
+change.
+
+To export all derived catalog attributes as a separate reproducible JSONL file:
+
+```powershell
+.\.venv\Scripts\python.exe extract_attributes.py
+```
+
+The default output is `data/catalog_attributes.jsonl`, containing one
+`parent_asin` and normalized `attributes` mapping per product. Generated files
+are ignored by Git and should not be committed.
+
 Call `normalize_attribute_map()` on rule-based or model-generated extraction
 results before saving them in `shopping_state`. It normalizes common catalog
 aliases such as `Fabric Type -> material`, `Department -> target_user`, and

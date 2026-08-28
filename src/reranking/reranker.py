@@ -17,7 +17,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeAlias
 
-from ..attribute import AttributeMap, AttributeName, AttributeValue
+from ..attribute import (
+    AttributeMap,
+    AttributeName,
+    AttributeValue,
+    product_attribute_text,
+)
 from ..item import Candidate, Candidates10, Item, RankedCandidate
 
 
@@ -63,8 +68,8 @@ class _PreparedCandidate:
         return self.source.parent_asin
 
     @property
-    def product(self) -> dict[str, Any]:
-        return self.source.item.to_dict()
+    def product(self) -> Item:
+        return self.source.item
 
 
 def _is_sequence(value: object) -> bool:
@@ -213,6 +218,12 @@ def _detail_value(product: Mapping[str, Any], attribute: str) -> object:
 
 
 def _attribute_text(product: Mapping[str, Any], attribute: str) -> str:
+    derived = getattr(product, "attributes", None)
+    if isinstance(derived, Mapping):
+        derived_text = product_attribute_text(derived, attribute)
+        if derived_text:
+            return derived_text
+
     explicit = product.get(attribute)
     detail = _detail_value(product, attribute)
     if attribute == "category":

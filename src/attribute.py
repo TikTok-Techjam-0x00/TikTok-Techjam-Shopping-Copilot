@@ -157,6 +157,59 @@ _ATTRIBUTE_ALIASES: dict[str, AttributeName] = {
 }
 
 
+# Conservative text fallbacks for product fields that are not explicitly
+# structured in ``details``.  These are deliberately small: a false product
+# attribute can hurt Retrieval filtering, 3A matching, and 3B questions at once.
+_PRODUCT_TEXT_VALUE_PATTERNS: dict[AttributeName, re.Pattern[str]] = {
+    AttributeName.MATERIAL: re.compile(
+        r"\b(cotton|polyester|nylon|leather|wool|spandex|silk|rayon|linen|"
+        r"suede|denim|canvas|mesh|rubber|stainless steel|sterling silver)\b",
+        re.IGNORECASE,
+    ),
+    AttributeName.COLOR: re.compile(
+        r"\b(black|white|blue|red|pink|green|brown|gr[ae]y|purple|yellow|"
+        r"orange|beige|silver|gold)\b",
+        re.IGNORECASE,
+    ),
+    AttributeName.SIZE: re.compile(
+        r"\b(xxs|xs|small|medium|large|xl|xxl|wide|narrow|petite|plus size)\b",
+        re.IGNORECASE,
+    ),
+    AttributeName.FIT: re.compile(
+        r"\b(slim fit|regular fit|relaxed fit|loose fit|wide|narrow)\b",
+        re.IGNORECASE,
+    ),
+    AttributeName.STYLE: re.compile(
+        r"\b(casual|formal|classic|modern|vintage|sporty|slim|relaxed)\b",
+        re.IGNORECASE,
+    ),
+    AttributeName.PATTERN: re.compile(
+        r"\b(solid|striped|plaid|floral|polka dot|geometric|animal print)\b",
+        re.IGNORECASE,
+    ),
+    AttributeName.USE_CASE: re.compile(
+        r"\b(hiking|running|gym|winter|outdoor|work|wedding|travel|daily)\b",
+        re.IGNORECASE,
+    ),
+}
+
+_GENERIC_CATEGORIES = frozenset({"clothing, shoes & jewelry"})
+_SIZE_DETAIL_ONLY_KEYS = frozenset(
+    {
+        "dimension",
+        "dimensions",
+        "product_dimensions",
+        "package_dimensions",
+        "diameter",
+        "length",
+        "width",
+        "height",
+        "weight",
+        "item_weight",
+    }
+)
+
+
 _SPACE_RE = re.compile(r"\s+")
 _NAME_RE = re.compile(r"[^a-z0-9]+")
 
@@ -382,6 +435,150 @@ def normalize_attribute_map(
     return result
 
 
+def _merge_product_attribute(
+    attributes: AttributeMap,
+    name: AttributeName,
+    raw_value: object,
+) -> None:
+    value = AttributeValue.from_raw(raw_value)
+    if value.is_empty():
+        return
+    attributes.setdefault(name, AttributeValue()).merge(value)
+
+
+def extract_product_attributes(product: Mapping[str, object]) -> AttributeMap:
+    """Derive canonical product attributes from one raw catalog record.
+
+    Official fields remain the source of truth.  This function creates an
+    internal, shared view for Retrieval, Reranking, and Dialogue without
+    inventing new catalog ground truth.  Unknown ``details`` keys are left in
+    the original ``details`` mapping instead of being duplicated under OTHERS.
+    """
+    attributes: AttributeMap = {}
+
+    raw_categories = _as_text_list(
+        product.get("categories", product.get("category"))
+    )
+    specific_categories = [
+        value for value in raw_categories if value.casefold() not in _GENERIC_CATEGORIES
+    ]
+    _merge_product_attribute(
+        attributes,
+        AttributeName.CATEGORY,
+        specific_categories or raw_categories,
+    )
+    _merge_product_attribute(
+        attributes,
+        AttributeName.FEATURE,
+        product.get("features", product.get("feature")),
+    )
+
+    price = _as_float(product.get("price"))
+    if price is not None:
+        attributes[AttributeName.BUDGET] = AttributeValue.range(
+            minimum=price,
+            maximum=price,
+            unit="USD",
+        )
+
+    details = product.get("details")
+    explicit_brand: list[str] = []
+    manufacturer_brand: list[str] = []
+    if isinstance(details, Mapping):
+        for raw_name, raw_value in details.items():
+            cleaned_name = _clean_name(raw_name)
+            name = normalize_attribute_name(raw_name)
+            if name is AttributeName.OTHERS:
+                continue
+            if name is AttributeName.BRAND:
+                if cleaned_name in {"brand", "brand_name"}:
+                    explicit_brand.extend(_as_text_list(raw_value))
+                else:
+                    manufacturer_brand.extend(_as_text_list(raw_value))
+                continue
+            # The official top-level fields above are more reliable than a
+            # similarly named details entry and must not be replaced.
+            if name in {AttributeName.BUDGET, AttributeName.RATING}:
+                continue
+            if name is AttributeName.SIZE and cleaned_name in _SIZE_DETAIL_ONLY_KEYS:
+                _merge_product_attribute(
+                    attributes,
+                    name,
+                    {"details": {cleaned_name: raw_value}},
+                )
+                continue
+            _merge_product_attribute(attributes, name, raw_value)
+
+    brand_source: object = explicit_brand or manufacturer_brand
+    if not brand_source:
+        brand_source = product.get("brand") or product.get("store")
+    _merge_product_attribute(attributes, AttributeName.BRAND, brand_source)
+
+    rating = _as_float(product.get("average_rating"))
+    rating_number = _as_float(product.get("rating_number"))
+    if rating is not None or rating_number is not None:
+        rating_details: dict[str, list[str]] = {}
+        if rating_number is not None:
+            rating_details["rating_number"] = [str(int(rating_number))]
+        attributes[AttributeName.RATING] = AttributeValue(
+            minimum=rating,
+            maximum=rating,
+            unit="stars" if rating is not None else None,
+            details=rating_details,
+        )
+
+    # Explicit catalog metadata wins.  Text inference only fills attributes
+    # that are still missing, using title/category/features rather than the
+    # much noisier long description.
+    searchable = " ".join(
+        _as_text_list(product.get("title"))
+        + _as_text_list(product.get("categories"))
+        + _as_text_list(product.get("features"))
+    )
+    for name, pattern in _PRODUCT_TEXT_VALUE_PATTERNS.items():
+        if name in attributes:
+            continue
+        matches = [match.group(0).lower() for match in pattern.finditer(searchable)]
+        _merge_product_attribute(attributes, name, matches)
+
+    return attributes
+
+
+def product_attribute_values(
+    attributes: Mapping[AttributeName, AttributeValue],
+    name: AttributeName | str,
+    *,
+    include_details: bool = True,
+) -> list[str]:
+    """Return deduplicated display/search values for one product attribute."""
+    value = attributes.get(normalize_attribute_name(name))
+    if value is None:
+        return []
+    values = list(value.values)
+    if include_details:
+        for detail_values in value.details.values():
+            values.extend(detail_values)
+    return _unique(values)
+
+
+def product_attribute_text(
+    attributes: Mapping[AttributeName, AttributeValue],
+    name: AttributeName | str,
+) -> str:
+    """Flatten one derived product attribute for lexical constraint matching."""
+    value = attributes.get(normalize_attribute_name(name))
+    if value is None:
+        return ""
+    parts = product_attribute_values(attributes, name)
+    if value.minimum is not None:
+        parts.append(str(value.minimum))
+    if value.maximum is not None and value.maximum != value.minimum:
+        parts.append(str(value.maximum))
+    if value.unit:
+        parts.append(value.unit)
+    return " ".join(_unique(parts))
+
+
 def attribute_map_to_dict(attributes: Mapping[AttributeName, AttributeValue]) -> dict[str, Any]:
     """Convert an AttributeMap to a JSON-safe mapping with string keys."""
     return {
@@ -410,6 +607,9 @@ __all__ = [
     "OFFICIAL_ASK_ATTRIBUTES",
     "normalize_attribute_name",
     "normalize_attribute_map",
+    "extract_product_attributes",
+    "product_attribute_values",
+    "product_attribute_text",
     "attribute_map_to_dict",
     "to_official_ask_attribute",
 ]

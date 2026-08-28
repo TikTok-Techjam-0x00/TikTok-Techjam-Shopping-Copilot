@@ -114,6 +114,19 @@ class ProductModelTest(unittest.TestCase):
         self.assertNotIn("title", serialized)
         self.assertEqual(serialized["bm25_score"], 9.2)
 
+    def test_item_exposes_derived_attributes_without_changing_official_dict(self) -> None:
+        product = Item.from_dict(
+            {
+                "parent_asin": "ATTR",
+                "details": {"Fabric Type": "Bamboo Viscose"},
+            }
+        )
+        self.assertEqual(
+            product.attributes[AttributeName.MATERIAL].values,
+            ["Bamboo Viscose"],
+        )
+        self.assertNotIn("attributes", product.to_dict())
+
 
 class SimpleRerankerTest(unittest.TestCase):
     def test_hard_constraints_can_change_retrieval_order(self) -> None:
@@ -121,6 +134,31 @@ class SimpleRerankerTest(unittest.TestCase):
         self.assertEqual(candidates_10[0].item.parent_asin, "MESH")
         leather = next(value for value in candidates_10 if value.item.parent_asin == "LEATHER")
         self.assertIn("material:not_matched", leather.violation)
+
+    def test_reranker_uses_shared_detail_aliases(self) -> None:
+        state = MockShoppingState(
+            session_id="alias-session",
+            user_profile={},
+            user_message="I want bamboo viscose.",
+            turn=2,
+            intent="buying",
+            hard_constraint=normalize_attribute_map({"material": "bamboo viscose"}),
+            soft_constraint={},
+            no_prefernce=[],
+        )
+        candidate = Candidate(
+            item=Item.from_dict(
+                {
+                    "parent_asin": "BAMBOO",
+                    "title": "Soft shirt",
+                    "details": {"Fabric Type": "Bamboo Viscose"},
+                }
+            ),
+            retrieval_score=1.0,
+        )
+        ranked = rerank(state, [candidate])
+        self.assertIn("material", ranked[0].matched)
+        self.assertNotIn("material:not_matched", ranked[0].violation)
 
     def test_output_is_reranked_candidate_list(self) -> None:
         candidates_10 = rerank(SHOPPING_STATE, CANDIDATES_100)
