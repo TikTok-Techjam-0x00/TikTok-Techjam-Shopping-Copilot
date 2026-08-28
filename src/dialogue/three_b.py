@@ -19,29 +19,36 @@ if TYPE_CHECKING:
 
 
 # 属性定义与基础优先级。
-# 当 Retrieval candidates 缺少商品元数据时，系统会退回到这组稳定的默认顺序。
+# Base 只表达通用语义层级；具体选择主要由本轮 Top100 的动态信号决定。
 ATTRIBUTES = (
     "category", "use_case", "feature", "size", "material",
     "budget", "style", "color", "brand", "other",
 )
 
+# Module 2 的共享 AttributeName 比官方 ask_attribute 更细；3B 在边界处统一映射。
+ATTRIBUTE_NAME_ALIASES = {"others": "other", "fit": "style"}
+
 BASE_PRIORITY = {
     "category": 90.0,
-    "use_case": 70.0,
-    "feature": 68.0,
-    "size": 66.0,
-    "material": 64.0,
-    "budget": 60.0,
-    "style": 58.0,
-    "color": 52.0,
-    "brand": 45.0,
+    "use_case": 60.0,
+    "feature": 65.0,
+    "size": 60.0,
+    "material": 65.0,
+    "budget": 55.0,
+    "style": 60.0,
+    "color": 60.0,
+    "brand": 35.0,
     "other": 5.0,
 }
+
+# 动态 Question Value 的最大增量；不包含任何 Public Set 派生的固定先验。
+DIVERSITY_COEFFICIENT = 18.0
 
 # Retrieval candidate 不一定有结构化属性；正则用于从标题、详情等文本中兜底提取。
 VALUE_PATTERNS = {
     "material": re.compile(
-        r"\b(cotton|polyester|nylon|leather|wool|spandex|silk|rayon|linen|suede|denim)\b", re.I
+        r"\b(cotton|polyester|nylon|leather|wool|spandex|silk|rayon|fabric|linen|suede|denim)\b",
+        re.I,
     ),
     "color": re.compile(
         r"\b(black|white|blue|red|pink|green|brown|gr[ae]y|purple|yellow|orange|beige)\b", re.I
@@ -49,6 +56,30 @@ VALUE_PATTERNS = {
     "size": re.compile(r"\b(xxs|xs|small|medium|large|xl|xxl|wide|narrow|petite|plus size)\b", re.I),
     "style": re.compile(r"\b(casual|formal|classic|modern|vintage|sporty|slim|relaxed)\b", re.I),
     "use_case": re.compile(r"\b(hiking|running|gym|winter|outdoor|work|wedding|travel|daily)\b", re.I),
+}
+
+# 统一常见商品文本的官方 ask_attribute 边界；未命中规则的文本属于 feature。
+CONSTRAINT_ATTRIBUTE_PATTERNS = (
+    ("budget", re.compile(r"budget|(?:\$|<=|under)\s*\d", re.I)),
+    (
+        "material",
+        re.compile(
+            r"\b(cotton|polyester|nylon|leather|wool|spandex|silk|rayon|fabric)\b",
+            re.I,
+        ),
+    ),
+    ("color", re.compile(r"\b(color|black|white|blue|red|pink|green)\b", re.I)),
+    ("size", re.compile(r"\b(size|sizing|width|wide|narrow)\b", re.I)),
+    ("style", re.compile(r"\b(department|style|fit|sleeve|neck)\b", re.I)),
+    ("use_case", re.compile(r"\b(hiking|running|gym|winter|outdoor|work)\b", re.I)),
+)
+
+# details 的 key 经常不是官方属性名，例如 Fabric Type、Fit Type、Item Width。
+DETAIL_KEY_MARKERS = {
+    "material": ("material", "fabric"),
+    "size": ("size", "sizing", "width"),
+    "style": ("style", "department", "fit", "sleeve", "neck"),
+    "feature": ("feature",),
 }
 
 
@@ -100,8 +131,7 @@ def _attribute_name(value: object) -> str | None:
     """把字符串或 AttributeName 统一成官方 ask_attribute 名称。"""
     raw_value = getattr(value, "value", value)
     name = str(raw_value).strip().lower()
-    if name == "others":
-        name = "other"
+    name = ATTRIBUTE_NAME_ALIASES.get(name, name)
     return name if name in ATTRIBUTES else None
 
 
@@ -191,14 +221,17 @@ def _text(value: object) -> str:
 
 
 def _detail_value(product: Mapping[str, Any], attribute: str) -> object:
-    """大小写不敏感地读取 details，例如 Material、material、use_case。"""
+    """按官方 ask_attribute 边界读取异构 details key。"""
     details = product.get("details")
     if not isinstance(details, Mapping):
         return None
     wanted = attribute.casefold().replace("_", " ")
+    markers = DETAIL_KEY_MARKERS.get(attribute, (wanted,))
     for key, value in details.items():
         normalized_key = str(key).casefold().replace("_", " ")
-        if normalized_key == wanted:
+        if normalized_key == wanted or any(
+            marker in normalized_key for marker in markers
+        ):
             return value
     return None
 
@@ -209,6 +242,14 @@ def _first_value(*values: object) -> object:
         if _is_value(value):
             return value
     return None
+
+
+def _constraint_attribute(value: str) -> str:
+    """将一条商品约束归入官方 ask_attribute。"""
+    for attribute, pattern in CONSTRAINT_ATTRIBUTE_PATTERNS:
+        if pattern.search(value):
+            return attribute
+    return "feature"
 
 
 def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
@@ -243,6 +284,9 @@ def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
     if _is_value(explicit):
         raw_values = explicit if isinstance(explicit, Sequence) and not isinstance(explicit, (str, bytes)) else [explicit]
         cleaned = {re.sub(r"\s+", " ", str(value)).strip().lower() for value in raw_values if _is_value(value)}
+        if attribute == "feature":
+            # Material、color 等不能同时贡献给 feature，否则会高估 feature 的排名影响。
+            cleaned = {value for value in cleaned if _constraint_attribute(value) == "feature"}
         return {value[:60] for value in cleaned if value}
 
     # 没有显式字段时，再从可搜索文本中提取有限的常见值。
@@ -259,14 +303,18 @@ def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
 def _candidate_diversity_signal(
     items: list[Candidate | Mapping[str, Any]], attribute: str
 ) -> tuple[float, list[str]]:
-    """计算候选多样性启发分，而非严格的信息增益。"""
+    """根据当前 Top100 动态估计 Answerability × Ranking Impact。"""
     if len(items) < 2:
         return 0.0, []
 
     # 排名靠前的商品权重更高，避免排名靠后的候选过度影响提问方向。
     weighted_counts: Counter[str] = Counter()
     covered = 0
+    covered_rank_weight = 0.0
+    total_rank_weight = 0.0
     for rank, candidate in enumerate(items, start=1):
+        weight = 1.0 / math.sqrt(rank)
+        total_rank_weight += weight
         product = _product(candidate)
         if product is None:
             continue
@@ -274,23 +322,28 @@ def _candidate_diversity_signal(
         if not values:
             continue
         covered += 1
-        weight = 1.0 / math.sqrt(rank)
+        covered_rank_weight += weight
         for value in values:
             weighted_counts[value] += weight / len(values)
 
     if covered < 2 or len(weighted_counts) < 2:
         return 0.0, [value for value, _ in weighted_counts.most_common(3)]
 
-    # 熵表示候选值是否分散；覆盖率表示该属性在多少候选商品上可用。
-    # 这只是对“这个问题能否有效区分候选”的近似，并不模拟用户回答后的重排。
+    # Answerability 是排名加权覆盖率；Ranking Impact 是归一化熵。
+    # 两者只读取本轮候选，不使用 public ground truth 或固定测试集分布。
     total = sum(weighted_counts.values())
     entropy = -sum((count / total) * math.log(count / total) for count in weighted_counts.values())
     normalized_entropy = entropy / math.log(len(weighted_counts))
-    coverage = covered / len(items)
+    answerability = covered_rank_weight / total_rank_weight
     # normalized entropy 已将不同候选值数量统一到 0～1，无需额外惩罚高 cardinality。
-    boost = 24.0 * coverage * normalized_entropy
+    boost = _question_value(answerability, normalized_entropy)
     options = [value for value, _ in weighted_counts.most_common(3)]
     return boost, options
+
+
+def _question_value(answerability: float, ranking_impact: float) -> float:
+    """组合运行时可观察的属性覆盖率和候选区分度。"""
+    return DIVERSITY_COEFFICIENT * answerability * ranking_impact
 
 
 def _turn_number(shopping_state: ShoppingStateInput) -> int:
@@ -328,13 +381,8 @@ def choose_ask_attribute(
     for order, attribute in enumerate(ATTRIBUTES):
         if attribute in excluded:
             continue
-        diversity_boost, options = _candidate_diversity_signal(items, attribute)
-        score = BASE_PRIORITY[attribute] + diversity_boost
-        # 前两轮偏向确认大方向，后续轮次偏向能直接缩小候选集的具体属性。
-        if turn <= 2 and attribute in ("category", "use_case"):
-            score += 8.0
-        if turn >= 4 and attribute in ("feature", "size", "material", "budget"):
-            score += 5.0
+        question_value, options = _candidate_diversity_signal(items, attribute)
+        score = BASE_PRIORITY[attribute] + question_value
         scored.append((score, -order, attribute, options))
 
     if not scored:

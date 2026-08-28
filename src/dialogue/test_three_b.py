@@ -5,8 +5,12 @@ from inspect import signature
 from types import SimpleNamespace
 
 from src.dialogue.three_b import (
+    BASE_PRIORITY,
+    DIVERSITY_COEFFICIENT,
     _candidate_diversity_signal,
+    _known_attributes,
     _product,
+    _question_value,
     _retrieval_items,
     _unavailable_attributes,
     _values,
@@ -33,6 +37,23 @@ CANDIDATES_100 = [
 
 
 class AskAttributeSelectorTest(unittest.TestCase):
+    def test_base_priority_uses_semantic_tiers(self) -> None:
+        self.assertEqual(
+            BASE_PRIORITY,
+            {
+                "category": 90.0,
+                "use_case": 60.0,
+                "feature": 65.0,
+                "size": 60.0,
+                "material": 65.0,
+                "budget": 55.0,
+                "style": 60.0,
+                "color": 60.0,
+                "brand": 35.0,
+                "other": 5.0,
+            },
+        )
+
     def test_unknown_category_is_asked_first(self) -> None:
         decision = decide_ask({"turn": 1}, CANDIDATES_100)
         self.assertEqual(decision["ask_attribute"], "category")
@@ -81,9 +102,9 @@ class AskAttributeSelectorTest(unittest.TestCase):
             [],
         )
         self.assertEqual(without_profile_signal, with_profile_signal)
-        self.assertEqual(with_profile_signal["ask_attribute"], "use_case")
+        self.assertEqual(with_profile_signal["ask_attribute"], "feature")
 
-    def test_diversity_maximum_is_24_for_low_and_high_cardinality(self) -> None:
+    def test_diversity_maximum_is_18_for_low_and_high_cardinality(self) -> None:
         # 每个候选都包含全部值，使 coverage 和 normalized entropy 都精确为 1。
         def candidates_with_all_values(values: list[str]) -> list[Candidate]:
             return [
@@ -99,24 +120,35 @@ class AskAttributeSelectorTest(unittest.TestCase):
             candidates_with_all_values([f"value-{i}" for i in range(20)]),
             "material",
         )
-        self.assertAlmostEqual(two_value_boost, 24.0)
-        self.assertAlmostEqual(twenty_value_boost, 24.0)
+        self.assertEqual(DIVERSITY_COEFFICIENT, 18.0)
+        self.assertAlmostEqual(two_value_boost, 18.0)
+        self.assertAlmostEqual(twenty_value_boost, 18.0)
 
-    def test_diversity_half_coverage_is_12(self) -> None:
-        candidates = [
+    def test_question_value_half_answerability_is_9(self) -> None:
+        self.assertAlmostEqual(_question_value(0.5, 1.0), 9.0)
+        self.assertAlmostEqual(_question_value(1.0, 0.5), 9.0)
+        self.assertEqual(_question_value(0.0, 1.0), 0.0)
+
+    def test_higher_ranked_attribute_coverage_has_more_question_value(self) -> None:
+        covered = [
             _candidate(
                 parent_asin=f"C{i}",
                 details={"Material": ["cotton", "wool"]},
             )
             for i in range(10)
         ]
-        candidates.extend(
+        missing = [
             _candidate(parent_asin=f"M{i}", details={})
-            for i in range(10, 20)
-        )
+            for i in range(10)
+        ]
 
-        boost, _ = _candidate_diversity_signal(candidates, "material")
-        self.assertAlmostEqual(boost, 12.0)
+        top_covered_boost, _ = _candidate_diversity_signal(
+            [*covered, *missing], "material"
+        )
+        bottom_covered_boost, _ = _candidate_diversity_signal(
+            [*missing, *covered], "material"
+        )
+        self.assertGreater(top_covered_boost, bottom_covered_boost)
 
     def test_nearly_identical_candidate_values_have_near_zero_boost(self) -> None:
         candidates = [
@@ -129,7 +161,7 @@ class AskAttributeSelectorTest(unittest.TestCase):
 
         boost, _ = _candidate_diversity_signal(candidates, "material")
         self.assertGreater(boost, 0.0)
-        self.assertLess(boost, 2.0)
+        self.assertLess(boost, 1.5)
 
     def test_turn_ten_does_not_ask_another_question(self) -> None:
         decision = decide_ask({"turn": 10}, CANDIDATES_100)
@@ -249,6 +281,33 @@ class AskAttributeSelectorTest(unittest.TestCase):
         product = {"details": {"Material": "Stainless Steel", "Color": "Silver"}}
         self.assertEqual(_values(product, "material"), {"stainless steel"})
         self.assertEqual(_values(product, "color"), {"silver"})
+
+    def test_constraint_extraction_matches_official_attribute_boundaries(self) -> None:
+        self.assertEqual(
+            _values({"details": {"Fabric Type": "Cotton Blend"}}, "material"),
+            {"cotton blend"},
+        )
+        self.assertEqual(
+            _values({"details": {"Fit Type": "Regular"}}, "style"),
+            {"regular"},
+        )
+        self.assertEqual(
+            _values({"details": {"Item Width": "Wide"}}, "size"),
+            {"wide"},
+        )
+        self.assertEqual(
+            _values(
+                {"features": ["100% Cotton", "Color: Black", "Waterproof"]},
+                "feature",
+            ),
+            {"waterproof"},
+        )
+
+    def test_module_two_fit_constraint_is_known_as_style(self) -> None:
+        self.assertEqual(
+            _known_attributes({"soft_constraint": {"fit": "relaxed"}}),
+            {"style"},
+        )
 
     def test_missing_details_uses_text_fallback(self) -> None:
         product = {"title": "Black cotton running shirt"}

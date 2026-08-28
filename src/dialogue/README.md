@@ -93,7 +93,7 @@ State 由 Module 2 创建和维护。3B 同时支持对象属性和普通 Mappin
 | `session_id` | 当前会话 ID | 共享契约，不参与当前评分 |
 | `user_profile` | 匿名聚合画像 | 保留共享契约；当前不参与 3B attribute scoring |
 | `user_message` | 当前用户消息 | Module 2 应先解析为约束 |
-| `turn` | 当前轮次 1～10 | 控制轮次策略和停止追问 |
+| `turn` | 当前轮次 1～10 | 第 10 轮停止继续追问 |
 | `intent` | `buying` 或 `browsing` | 共享契约，当前 3B 不直接使用 |
 | `hard_constraint` | 用户硬约束 | 其中的属性不会再次询问 |
 | `soft_constraint` | 用户软偏好 | 其中的属性不会再次询问 |
@@ -113,6 +113,9 @@ shopping_state.soft_constraint = {
 shopping_state.no_prefernce = [AttributeName.BRAND]
 shopping_state.asked_attributes = ["material"]
 ```
+
+共享枚举中的 `fit` 会在 3B 边界映射为官方 `ask_attribute="style"`，保持团队
+State 与 3B 输出枚举一致。
 
 3B 当前只需要判断 constraint value 是否存在，不解析 `AttributeValue` 的具体
 语义。`no_prefernce` 是团队正式拼写；低成本保留 `no_preference` 兼容拼写。
@@ -238,27 +241,45 @@ Brand 优先级为：
 明确 brand → details["Brand"] → store → 文本 fallback
 ```
 
-### 5.3 候选多样性
+### 5.3 Answerability 与 Ranking Impact
 
 对每个尚未排除的属性，当前策略计算：
 
+- Base Priority：只提供稳定的通用语义层级，不使用测试集属性分布。
 - rank weighting：`1 / sqrt(rank)`，排名靠前的 Candidate 权重更高。
-- coverage：具有该属性值的候选占比。
-- normalized entropy：候选值分布的分散程度。
-- turn policy：前期偏向明确意图，后期偏向具体商品属性。
+- Answerability：当前 Top100 中具有该属性值的排名加权覆盖率。
+- Ranking Impact：候选值分布的 normalized entropy。
 
-多样性加分使用统一公式：
+Base Priority 使用少量语义分层：
 
 ```text
-diversity_boost = 24 × coverage × normalized_entropy
+category=90
+feature=65, material=65
+use_case=60, size=60, style=60, color=60
+budget=55, brand=35, other=5
 ```
 
-normalized entropy 已把不同候选值数量归一化到 `0～1`，因此不再对高
-cardinality 额外降权。系数 `24` 是多样性加分的上限：既让有区分度的候选分布
-能够影响提问顺序，又不至于完全覆盖基础优先级。`user_profile` 仍保留在 State
-接口中，但不参与 3B 评分，避免与已经使用 Profile 的 3A 排名重复计算同一信号。
+最终评分公式为：
 
-这是候选多样性启发式，不是模拟用户回答并重新 Retrieval 后的严格信息增益。
+```text
+rank_weight(r) = 1 / sqrt(r)
+answerability = sum(rank_weight of covered candidates) / sum(all rank_weight)
+ranking_impact = normalized_entropy
+question_value = 18 × answerability × ranking_impact
+score = base_priority + question_value
+```
+
+Answerability 和 Ranking Impact 都只从本轮 Module 1 candidates 计算，不读取
+public ground truth、scenario label 或固定测试集统计。排名靠前的候选具有更大权重；
+单个商品有多个值时，其权重仍平均分给这些值。
+
+normalized entropy 已把不同候选值数量归一化到 `0～1`，因此不同 cardinality
+不会被额外奖励或惩罚。系数 `18` 是动态 Question Value 的上限。`user_profile`
+仍保留在 State 接口中，但不参与 3B 评分，避免与已经使用 Profile 的 3A 排名
+重复计算。
+
+Ranking Impact 仍是候选多样性启发式，不是模拟用户回答并重新 Retrieval 后的
+严格排名增益。
 现有权重保持 deterministic，3B 不读取 `rerank_score` 或 Retrieval score 阈值。
 
 ### 5.4 问题生成
@@ -352,7 +373,10 @@ python -m unittest src.dialogue.test_three_b -v
 - hard/soft constraint、`AttributeValue`、no preference 和 asked attributes。
 - dict State 与 object State。
 - details 的 Material、Color、Brand 及文本 fallback。
+- Fabric/Fit/Width 和 feature 排他分类与官方属性边界一致。
 - 空候选、缺少所有分数字段和 turn >= 10。
+- 语义分层 Base Priority、动态 Answerability、18 分 Question Value 上限。
+- 排名靠前的属性覆盖对 Answerability 影响更大。
 - normalized entropy、coverage、不同 cardinality 等权和问题模板行为。
 - 不同 `user_profile` 不会改变 3B 的评分与选择结果。
 
