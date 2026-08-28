@@ -338,6 +338,30 @@ class SimpleReranker:
         if not 1 <= top_k <= 10:
             raise ValueError("top_k must be between 1 and 10")
 
+        return self._rank(shopping_state, candidates_100, limit=top_k)
+
+    def rank_all(
+        self,
+        shopping_state: ShoppingStateInput,
+        candidates_100: Sequence[Candidate | Mapping[str, Any]],
+    ) -> list[RankedCandidate]:
+        """Return the complete order for offline diagnostics and replay evaluation.
+
+        The production contract remains :meth:`rerank`, which returns at most ten
+        candidates.  A complete order is needed offline to measure the target's
+        exact promotion or demotion without exposing extra recommendations.
+        """
+
+        return self._rank(shopping_state, candidates_100, limit=100)
+
+    def _rank(
+        self,
+        shopping_state: ShoppingStateInput,
+        candidates_100: Sequence[Candidate | Mapping[str, Any]],
+        *,
+        limit: int,
+    ) -> list[RankedCandidate]:
+
         prepared = _prepare_candidates(candidates_100)
         hard, soft = _state_constraints(shopping_state)
         shopping_intent = _shopping_intent(shopping_state)
@@ -391,11 +415,11 @@ class SimpleReranker:
                     row[1].parent_asin,
                 )
             )
-        candidates_10: list[RankedCandidate] = []
+        ranked_candidates: list[RankedCandidate] = []
         for rank, (score, candidate, _, matched, violations) in enumerate(
-            scored[:top_k], start=1
+            scored[:limit], start=1
         ):
-            candidates_10.append(
+            ranked_candidates.append(
                 RankedCandidate.from_candidate(
                     candidate.source,
                     rerank_rank=rank,
@@ -404,7 +428,7 @@ class SimpleReranker:
                     violation=violations,
                 )
             )
-        return candidates_10
+        return ranked_candidates
 
 
 def rerank(

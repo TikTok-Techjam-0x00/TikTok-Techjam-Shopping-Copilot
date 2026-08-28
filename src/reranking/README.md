@@ -715,7 +715,25 @@ Reranking 测试覆盖：
 - 输入对象是否保持不变。
 - `candidates_10` 是否能被 Dialogue 读取。
 
-## 9. 接口摘要
+## 9. Replay Evaluator
+
+Reranking 专用离线评测位于 `src/reranking/replay/`。先录制固定的 State 与
+Candidates100，再让不同 Reranker 重放同一批输入：
+
+```text
+python -m src.reranking.replay.recorder
+python -m src.reranking.replay.evaluator artifacts/reranking_replay/<dataset-run>
+```
+
+每次录制都会创建不可覆盖的新版本目录。`manifest.json` 保存整体 Git commit、
+branch、dirty 状态、各模块最近一次提交、当前文件哈希、Catalog/public set 哈希、
+运行命令与生成策略。评测报告同时记录“数据生成代码版本”和“被测试 Reranker
+代码版本”，避免用不同上游输入得出错误对比。
+
+目标 ASIN 单独保存在 `labels.jsonl`，不会出现在 `cases.jsonl.gz` 或传给
+Reranker。详细格式、命令和指标见 `src/reranking/replay/README.md`。
+
+## 10. 接口摘要
 
 ```python
 from src.item import Item, Candidate, RankedCandidate

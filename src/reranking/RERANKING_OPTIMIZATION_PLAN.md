@@ -722,8 +722,8 @@ adapter 使用它。
 ### 阶段 A：建立可测基线
 
 1. 在当前最新 `beta` 上重新运行完整 evaluator，记录新的 R0。
-2. 保存 RerankCase replay 数据。
-3. 实现 promotion/demotion、conditional hit 和 latency 指标。
+2. 已实现版本化 RerankCase 录制，保存 State、Candidates100、Git 和各组件指纹。
+3. 已实现 promotion/demotion、conditional hit/MRR、约束质量和 latency 指标。
 
 ### 阶段 B：结构化规则精排
 
