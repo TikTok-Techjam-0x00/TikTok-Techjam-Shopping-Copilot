@@ -38,17 +38,6 @@ BASE_PRIORITY = {
     "other": 5.0,
 }
 
-# 用户画像只负责小幅调整优先级，不会被当成用户已经明确表达的约束。
-PROFILE_TAG_TO_ATTRIBUTE = {
-    "material": "material", "fabric": "material",
-    "fit": "size", "size": "size",
-    "style": "style", "fashion": "style",
-    "comfort": "feature", "durability": "feature", "warmth": "feature",
-    "weather": "use_case", "occasion": "use_case",
-    "price": "budget", "value": "budget",
-    "brand": "brand", "color": "color", "colour": "color",
-}
-
 # Retrieval candidate 不一定有结构化属性；正则用于从标题、详情等文本中兜底提取。
 VALUE_PATTERNS = {
     "material": re.compile(
@@ -298,25 +287,10 @@ def _candidate_diversity_signal(
     entropy = -sum((count / total) * math.log(count / total) for count in weighted_counts.values())
     normalized_entropy = entropy / math.log(len(weighted_counts))
     coverage = covered / len(items)
-    # 2～5 个主要取值比较适合追问；取值过多通常会让问题过于宽泛。
-    cardinality_factor = min(1.0, 5.0 / len(weighted_counts))
-    boost = 38.0 * coverage * normalized_entropy * cardinality_factor
+    # normalized entropy 已将不同候选值数量统一到 0～1，无需额外惩罚高 cardinality。
+    boost = 24.0 * coverage * normalized_entropy
     options = [value for value, _ in weighted_counts.most_common(3)]
     return boost, options
-
-
-def _profile_boosts(shopping_state: ShoppingStateInput) -> Counter[str]:
-    """将用户画像标签转换成较小的属性优先级增量。"""
-    profile = _state_value(shopping_state, "user_profile")
-    tags = profile.get("preference_tags", []) if isinstance(profile, Mapping) else []
-    boosts: Counter[str] = Counter()
-    if not isinstance(tags, Sequence) or isinstance(tags, (str, bytes)):
-        return boosts
-    for tag in tags:
-        attribute = PROFILE_TAG_TO_ATTRIBUTE.get(str(tag).lower())
-        if attribute:
-            boosts[attribute] += 12.0
-    return boosts
 
 
 def _turn_number(shopping_state: ShoppingStateInput) -> int:
@@ -344,7 +318,6 @@ def choose_ask_attribute(
         | _unavailable_attributes(shopping_state)
     )
     items = _retrieval_items(candidates_100)
-    profile_boosts = _profile_boosts(shopping_state)
 
     # 类别是基础约束：模块 2 尚未确认类别时，先不比较更细的商品属性。
     if "category" not in excluded:
@@ -356,7 +329,7 @@ def choose_ask_attribute(
         if attribute in excluded:
             continue
         diversity_boost, options = _candidate_diversity_signal(items, attribute)
-        score = BASE_PRIORITY[attribute] + profile_boosts[attribute] + diversity_boost
+        score = BASE_PRIORITY[attribute] + diversity_boost
         # 前两轮偏向确认大方向，后续轮次偏向能直接缩小候选集的具体属性。
         if turn <= 2 and attribute in ("category", "use_case"):
             score += 8.0

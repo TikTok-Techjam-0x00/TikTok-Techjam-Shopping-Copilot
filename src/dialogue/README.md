@@ -91,7 +91,7 @@ State 由 Module 2 创建和维护。3B 同时支持对象属性和普通 Mappin
 | 字段 | 含义 | 3B 用途 |
 | --- | --- | --- |
 | `session_id` | 当前会话 ID | 共享契约，不参与当前评分 |
-| `user_profile` | 匿名聚合画像 | 对相关属性提供小幅 priority boost |
+| `user_profile` | 匿名聚合画像 | 保留共享契约；当前不参与 3B attribute scoring |
 | `user_message` | 当前用户消息 | Module 2 应先解析为约束 |
 | `turn` | 当前轮次 1～10 | 控制轮次策略和停止追问 |
 | `intent` | `buying` 或 `browsing` | 共享契约，当前 3B 不直接使用 |
@@ -245,9 +245,18 @@ Brand 优先级为：
 - rank weighting：`1 / sqrt(rank)`，排名靠前的 Candidate 权重更高。
 - coverage：具有该属性值的候选占比。
 - normalized entropy：候选值分布的分散程度。
-- cardinality factor：对过多且零散的候选值降权。
-- profile boost：画像标签只提供小幅增量，不被视为显式约束。
 - turn policy：前期偏向明确意图，后期偏向具体商品属性。
+
+多样性加分使用统一公式：
+
+```text
+diversity_boost = 24 × coverage × normalized_entropy
+```
+
+normalized entropy 已把不同候选值数量归一化到 `0～1`，因此不再对高
+cardinality 额外降权。系数 `24` 是多样性加分的上限：既让有区分度的候选分布
+能够影响提问顺序，又不至于完全覆盖基础优先级。`user_profile` 仍保留在 State
+接口中，但不参与 3B 评分，避免与已经使用 Profile 的 3A 排名重复计算同一信号。
 
 这是候选多样性启发式，不是模拟用户回答并重新 Retrieval 后的严格信息增益。
 现有权重保持 deterministic，3B 不读取 `rerank_score` 或 Retrieval score 阈值。
@@ -344,7 +353,8 @@ python -m unittest src.dialogue.test_three_b -v
 - dict State 与 object State。
 - details 的 Material、Color、Brand 及文本 fallback。
 - 空候选、缺少所有分数字段和 turn >= 10。
-- 原有 entropy、coverage、cardinality 和问题模板行为。
+- normalized entropy、coverage、不同 cardinality 等权和问题模板行为。
+- 不同 `user_profile` 不会改变 3B 的评分与选择结果。
 
 ## 9. 接口摘要
 

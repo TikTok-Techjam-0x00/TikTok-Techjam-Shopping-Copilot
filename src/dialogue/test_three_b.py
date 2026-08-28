@@ -56,11 +56,80 @@ class AskAttributeSelectorTest(unittest.TestCase):
             "hard_constraint": {"category": "shoes", "use_case": "walking"},
             "soft_constraint": {"feature": "comfortable"},
             "asked_attributes": ["size"],
-            "user_profile": {"preference_tags": ["material"]},
         }
         decision = decide_ask(state, CANDIDATES_100)
         self.assertEqual(decision["ask_attribute"], "material")
         self.assertIn("leather", decision["message"])
+
+    def test_user_profile_does_not_change_attribute_scoring(self) -> None:
+        # Profile 已由 3A 用于排序；3B 不应再次把同一信号加到 attribute score。
+        shared_state = {
+            "turn": 3,
+            "hard_constraint": {"category": "shoes"},
+        }
+        without_profile_signal = decide_ask(
+            {**shared_state, "user_profile": {"preference_tags": []}},
+            [],
+        )
+        with_profile_signal = decide_ask(
+            {
+                **shared_state,
+                "user_profile": {
+                    "preference_tags": ["material", "fit", "brand"],
+                },
+            },
+            [],
+        )
+        self.assertEqual(without_profile_signal, with_profile_signal)
+        self.assertEqual(with_profile_signal["ask_attribute"], "use_case")
+
+    def test_diversity_maximum_is_24_for_low_and_high_cardinality(self) -> None:
+        # 每个候选都包含全部值，使 coverage 和 normalized entropy 都精确为 1。
+        def candidates_with_all_values(values: list[str]) -> list[Candidate]:
+            return [
+                _candidate(parent_asin=f"C{i}", details={"Material": values})
+                for i in range(20)
+            ]
+
+        two_value_boost, _ = _candidate_diversity_signal(
+            candidates_with_all_values(["value-1", "value-2"]),
+            "material",
+        )
+        twenty_value_boost, _ = _candidate_diversity_signal(
+            candidates_with_all_values([f"value-{i}" for i in range(20)]),
+            "material",
+        )
+        self.assertAlmostEqual(two_value_boost, 24.0)
+        self.assertAlmostEqual(twenty_value_boost, 24.0)
+
+    def test_diversity_half_coverage_is_12(self) -> None:
+        candidates = [
+            _candidate(
+                parent_asin=f"C{i}",
+                details={"Material": ["cotton", "wool"]},
+            )
+            for i in range(10)
+        ]
+        candidates.extend(
+            _candidate(parent_asin=f"M{i}", details={})
+            for i in range(10, 20)
+        )
+
+        boost, _ = _candidate_diversity_signal(candidates, "material")
+        self.assertAlmostEqual(boost, 12.0)
+
+    def test_nearly_identical_candidate_values_have_near_zero_boost(self) -> None:
+        candidates = [
+            _candidate(parent_asin=f"C{i}", details={"Material": "Cotton"})
+            for i in range(99)
+        ]
+        candidates.append(
+            _candidate(parent_asin="P99", details={"Material": "Polyester"})
+        )
+
+        boost, _ = _candidate_diversity_signal(candidates, "material")
+        self.assertGreater(boost, 0.0)
+        self.assertLess(boost, 2.0)
 
     def test_turn_ten_does_not_ask_another_question(self) -> None:
         decision = decide_ask({"turn": 10}, CANDIDATES_100)
