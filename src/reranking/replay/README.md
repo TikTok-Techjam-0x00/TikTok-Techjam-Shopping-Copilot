@@ -34,6 +34,13 @@ valid in the current Pipeline because Dialogue reads `Candidates100` rather than
 the reranked Top 10. Intent Override cases before the override are recorded with
 `scorable=false` and excluded from hit metrics.
 
+By default, capture records the real pre-reranking input but uses Retrieval order
+for the temporary response recommendations. Those recommendations do not affect
+the next turn in the current Dialogue implementation, so this makes repeated
+dataset generation much faster without changing recorded State or Candidates100.
+Use `--execute-runtime-reranker` for the slower delegate mode; the selected mode
+is always written to `manifest.json`.
+
 ## 2. Replay experiments
 
 ```powershell

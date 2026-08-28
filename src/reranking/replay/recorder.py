@@ -123,9 +123,16 @@ class ReplayRecorder:
 class RecordingReranker:
     """Transparent wrapper that records inputs and delegates runtime output."""
 
-    def __init__(self, delegate: RerankerProtocol, recorder: ReplayRecorder) -> None:
+    def __init__(
+        self,
+        delegate: RerankerProtocol,
+        recorder: ReplayRecorder,
+        *,
+        execute_delegate: bool = False,
+    ) -> None:
         self.delegate = delegate
         self.recorder = recorder
+        self.execute_delegate = execute_delegate
 
     def rerank(
         self,
@@ -134,7 +141,32 @@ class RecordingReranker:
         top_k: int = 10,
     ) -> list[RankedCandidate]:
         self.recorder.record(shopping_state, candidates_100)
-        return self.delegate.rerank(shopping_state, candidates_100, top_k=top_k)
+        if self.execute_delegate:
+            return self.delegate.rerank(shopping_state, candidates_100, top_k=top_k)
+
+        # The current Dialogue policy reads candidates_100 directly, and the
+        # recorder deliberately ignores target-hit stopping. Recommendations do
+        # not affect the next simulated message, so a retrieval-order passthrough
+        # avoids paying for a Reranker whose output is discarded during capture.
+        result: list[RankedCandidate] = []
+        seen: set[str] = set()
+        for raw in candidates_100[:100]:
+            candidate = raw if isinstance(raw, Candidate) else Candidate.from_dict(raw)
+            if candidate.parent_asin in seen:
+                continue
+            seen.add(candidate.parent_asin)
+            result.append(
+                RankedCandidate.from_candidate(
+                    candidate,
+                    rerank_rank=len(result) + 1,
+                    rerank_score=float(candidate.retrieval_score or 0.0),
+                    matched=[],
+                    violation=[],
+                )
+            )
+            if len(result) >= top_k:
+                break
+        return result
 
 
 def _safe_run_id(value: str) -> str:
@@ -178,6 +210,8 @@ def collect_replay_dataset(
     run_id: str | None = None,
     limit: int | None = None,
     max_turns: int = MAX_TURNS,
+    execute_runtime_reranker: bool = False,
+    progress_every: int = 0,
     command: list[str] | None = None,
 ) -> Path:
     """Record every deterministic turn, continuing after hits to avoid survival bias."""
@@ -189,6 +223,8 @@ def collect_replay_dataset(
         raise ValueError("limit must be positive")
     if not 1 <= max_turns <= MAX_TURNS:
         raise ValueError(f"max_turns must be between 1 and {MAX_TURNS}")
+    if progress_every < 0:
+        raise ValueError("progress_every must not be negative")
 
     provenance = collect_provenance(
         PROJECT_ROOT,
@@ -208,7 +244,11 @@ def collect_replay_dataset(
     pipeline = Pipeline(catalog_path)
     catalog = _catalog_from_pipeline(pipeline)
     recorder = ReplayRecorder()
-    pipeline.reranker = RecordingReranker(pipeline.reranker, recorder)
+    pipeline.reranker = RecordingReranker(
+        pipeline.reranker,
+        recorder,
+        execute_delegate=execute_runtime_reranker,
+    )
 
     for index, sample in enumerate(samples, start=1):
         sample_id = str(sample.get("sample_id") or f"sample_{index:04d}")
@@ -263,6 +303,18 @@ def collect_replay_dataset(
                     disclosed,
                     boundary_used,
                 )
+        if progress_every and (index % progress_every == 0 or index == len(samples)):
+            print(
+                json.dumps(
+                    {
+                        "recorded_samples": index,
+                        "total_samples": len(samples),
+                        "recorded_cases": len(recorder.cases),
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
 
     cases_path = run_directory / "cases.jsonl.gz"
     labels_path = run_directory / "labels.jsonl"
@@ -283,6 +335,10 @@ def collect_replay_dataset(
             "top_k": TOP_K,
             "max_turns": max_turns,
             "retrieval_k": 100,
+            "runtime_reranker_execution": (
+                "delegate" if execute_runtime_reranker else "retrieval_order_passthrough"
+            ),
+            "runtime_reranker_output_affects_dialogue": False,
         },
         "counts": {
             "samples": len(samples),
@@ -317,6 +373,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--max-turns", type=int, default=MAX_TURNS)
+    parser.add_argument(
+        "--execute-runtime-reranker",
+        action="store_true",
+        help="Also execute the current Reranker during recording (slower; not needed by current Dialogue).",
+    )
+    parser.add_argument("--progress-every", type=int, default=10)
     return parser
 
 
@@ -329,6 +391,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_id=args.run_id,
         limit=args.limit,
         max_turns=args.max_turns,
+        execute_runtime_reranker=args.execute_runtime_reranker,
+        progress_every=args.progress_every,
         command=[sys.executable, "-m", "src.reranking.replay.recorder", *(argv or sys.argv[1:])],
     )
     print(json.dumps({"replay_dataset": str(run_directory)}, ensure_ascii=False, indent=2))

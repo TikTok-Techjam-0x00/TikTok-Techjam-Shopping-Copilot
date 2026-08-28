@@ -122,6 +122,10 @@ class ReplayEvaluatorIntegrationTest(unittest.TestCase):
             manifest, cases, labels = load_replay_dataset(replay_directory)
             self.assertEqual(manifest["run_id"], "test-dataset-v1")
             self.assertEqual(manifest["counts"]["cases"], 6)
+            self.assertEqual(
+                manifest["generation_policy"]["runtime_reranker_execution"],
+                "retrieval_order_passthrough",
+            )
             self.assertIn("component_versions", manifest["generation_provenance"])
             self.assertIn("commit", manifest["generation_provenance"]["git"])
             self.assertNotEqual(manifest["generation_provenance"]["git"]["commit"], "unknown")
