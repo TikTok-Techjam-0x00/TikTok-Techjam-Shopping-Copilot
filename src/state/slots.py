@@ -23,6 +23,24 @@ CATEGORY_PATTERNS = (
     re.compile(r"(?:change that to|instead(?:,)?(?: i need)?|now i need)\s*:?[ ]*(?:an?\s+)?(.+?)(?=\.|,|;|$)", re.I),
 )
 ATTRIBUTE_ALIASES = {"colour": "color", "price": "budget", "price_max": "budget"}
+BOUNDARY_ATTRIBUTES = (
+    "category", "material", "color", "colour", "size", "style", "brand",
+    "budget", "feature", "use_case",
+)
+BOUNDARY_ATTRIBUTE_RE = re.compile(
+    rf"(?:don['’]?t care about\s+|do not care about\s+|"
+    rf"don['’]?t want to consider\s+|do not want to consider\s+|"
+    rf"no constraints? (?:on|for)\s+)({'|'.join(BOUNDARY_ATTRIBUTES)})\b|"
+    rf"\bany\s+({'|'.join(BOUNDARY_ATTRIBUTES)})\s+(?:is fine|works|will do)\b|"
+    rf"\b({'|'.join(BOUNDARY_ATTRIBUTES)})\s+(?:(?:doesn['’]?t|does not) matter|is irrelevant)\b",
+    re.I,
+)
+BOUNDARY_REPLY_RE = re.compile(
+    r"\b(?:no preference|anything is fine|either is fine|doesn['’]?t matter|"
+    r"does not matter|don['’]?t care|do not care|use your judgment|"
+    r"use your judgement|not important|irrelevant|skip (?:it|this|that)|surprise me)\b",
+    re.I,
+)
 
 
 def _first_term(text: str, values: tuple[str, ...]) -> str | None:
@@ -53,6 +71,17 @@ def _active_scope(text: str, is_override: bool) -> str:
     return text[markers[-1].end():] if markers else text
 
 
+def _boundary_attribute(text: str, asked_attribute: str | None) -> str | None:
+    explicit = NO_PREFERENCE_RE.search(text) or BOUNDARY_ATTRIBUTE_RE.search(text)
+    if explicit:
+        value = next((group for group in explicit.groups() if group), None)
+        if value:
+            return ATTRIBUTE_ALIASES.get(value.lower(), value.lower())
+    if asked_attribute and BOUNDARY_REPLY_RE.search(text):
+        return ATTRIBUTE_ALIASES.get(asked_attribute, asked_attribute)
+    return None
+
+
 def extract_slots(message: str, *, asked_attribute: str | None = None, is_override: bool = False) -> StateUpdate:
     text = " ".join(message.strip().split())
     if not text:
@@ -63,11 +92,15 @@ def extract_slots(message: str, *, asked_attribute: str | None = None, is_overri
     raw_soft: dict[str, object] = {}
     raw_rejected: dict[str, object] = {}
 
-    unavailable = NO_PREFERENCE_RE.search(text)
-    if unavailable:
-        name = next((group for group in unavailable.groups() if group), "other").lower()
-        no_preference.add(ATTRIBUTE_ALIASES.get(name, name))
-        return StateUpdate.from_raw(no_preference=no_preference, override=is_override, clear_soft_constraint=is_override)
+    boundary_attribute = _boundary_attribute(text, asked_attribute)
+    if boundary_attribute:
+        no_preference.add(boundary_attribute)
+        return StateUpdate.from_raw(
+            no_preference=no_preference,
+            boundary_attributes={boundary_attribute},
+            override=is_override,
+            clear_soft_constraint=is_override,
+        )
 
     category = _extract_category(text)
     if category:

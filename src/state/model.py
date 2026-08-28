@@ -31,7 +31,9 @@ class StateUpdate:
     soft_constraint: AttributeMap = field(default_factory=dict)
     no_preference: set[AttributeName] = field(default_factory=set)
     rejected_values: AttributeMap = field(default_factory=dict)
+    boundary_attributes: set[AttributeName] = field(default_factory=set)
     override: bool = False
+    clear_hard_constraint: bool = False
     clear_soft_constraint: bool = False
 
     @classmethod
@@ -43,7 +45,9 @@ class StateUpdate:
         soft_constraint: Mapping[str | AttributeName, object] | None = None,
         no_preference: set[str | AttributeName] | None = None,
         rejected_values: Mapping[str | AttributeName, object] | None = None,
+        boundary_attributes: set[str | AttributeName] | None = None,
         override: bool = False,
+        clear_hard_constraint: bool = False,
         clear_soft_constraint: bool = False,
     ) -> StateUpdate:
         return cls(
@@ -52,7 +56,12 @@ class StateUpdate:
             soft_constraint=normalize_attribute_map(soft_constraint),
             no_preference={normalize_attribute_name(value) for value in no_preference or set()},
             rejected_values=normalize_attribute_map(rejected_values),
+            boundary_attributes={
+                normalize_attribute_name(value)
+                for value in boundary_attributes or set()
+            },
             override=override,
+            clear_hard_constraint=clear_hard_constraint,
             clear_soft_constraint=clear_soft_constraint,
         )
 
@@ -74,6 +83,9 @@ class ShoppingState:
     history: list[str] = field(default_factory=list)
     intent_confidence: float = 0.0
     override_detected: bool = False
+    intent_transitions: list[dict[str, Any]] = field(default_factory=list)
+    boundary_detected: bool = False
+    boundary_attributes: list[AttributeName] = field(default_factory=list)
 
     def _replace(self, target: AttributeMap, name: AttributeName, value: AttributeValue) -> None:
         target[name] = value.copy()
@@ -94,8 +106,13 @@ class ShoppingState:
         """Apply one turn while preserving still-valid cross-category constraints."""
 
         self.override_detected = update.override
+        self.boundary_detected = bool(update.boundary_attributes)
         if update.intent is not None:
             self.intent = update.intent
+
+        if update.clear_hard_constraint:
+            self.hard_constraint.clear()
+            self.rejected_values.clear()
 
         new_category = update.hard_constraint.get(AttributeName.CATEGORY)
         if update.override and new_category is not None:
@@ -109,6 +126,9 @@ class ShoppingState:
             self.soft_constraint.pop(name, None)
             if name not in self.no_prefernce:
                 self.no_prefernce.append(name)
+        for name in update.boundary_attributes:
+            if name not in self.boundary_attributes:
+                self.boundary_attributes.append(name)
 
         # Explicit hard slots are single-valued and the newest turn wins.
         for name, value in update.hard_constraint.items():
@@ -142,6 +162,9 @@ class ShoppingState:
             "asked_attributes": list(self.asked_attributes),
             "history": list(self.history),
             "override_detected": self.override_detected,
+            "intent_transitions": [dict(value) for value in self.intent_transitions],
+            "boundary_detected": self.boundary_detected,
+            "boundary_attributes": [name.value for name in self.boundary_attributes],
         }
 
     def copy(self) -> ShoppingState:
@@ -159,4 +182,7 @@ class ShoppingState:
             history=list(self.history),
             intent_confidence=self.intent_confidence,
             override_detected=self.override_detected,
+            intent_transitions=[dict(value) for value in self.intent_transitions],
+            boundary_detected=self.boundary_detected,
+            boundary_attributes=list(self.boundary_attributes),
         )

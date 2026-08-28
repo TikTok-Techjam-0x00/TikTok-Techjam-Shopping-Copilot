@@ -4,6 +4,7 @@ import json
 import unittest
 
 from src.attribute import AttributeName
+from src.dialogue import decide_ask
 from src.state import StateUpdate
 from src.state import (
     create_state,
@@ -40,6 +41,37 @@ class ConversationStateTest(unittest.TestCase):
         self.assertEqual(state.intent, "browsing")
         self.assertEqual(state.category, "women's shoes")
 
+    def test_browsing_to_buying_is_an_implicit_intent_override(self) -> None:
+        state = create_state("session")
+        update_state(state, "I'm still exploring running shoes.", turn=1)
+        update_state(state, "I need black hiking boots under $100.", turn=2)
+
+        self.assertEqual(state.intent, "buying")
+        self.assertTrue(state.override_detected)
+        self.assertEqual(state.category, "black hiking boots")
+        self.assertEqual(state.hard_constraint[AttributeName.BUDGET].maximum, 100.0)
+        self.assertNotIn("running", retrieval_query(state))
+        self.assertEqual(
+            state.intent_transitions[-1],
+            {"turn": 2, "from": "browsing", "to": "buying"},
+        )
+
+    def test_buying_to_browsing_clears_purchase_constraints(self) -> None:
+        state = create_state("session")
+        update_state(state, "I need black running shoes under $120.", turn=1)
+        update_state(
+            state,
+            "Actually, forget the requirements. I'm just browsing. Show me winter jackets.",
+            turn=2,
+        )
+
+        self.assertEqual(state.intent, "browsing")
+        self.assertTrue(state.override_detected)
+        self.assertEqual(state.category, "winter jackets")
+        self.assertNotIn(AttributeName.BUDGET, state.hard_constraint)
+        self.assertNotIn(AttributeName.COLOR, state.hard_constraint)
+        self.assertNotIn("running", retrieval_query(state))
+
     def test_direct_answer_uses_previous_asked_attribute(self) -> None:
         state = create_state("session")
 
@@ -59,6 +91,56 @@ class ConversationStateTest(unittest.TestCase):
 
         self.assertNotIn(AttributeName.COLOR, state.hard_constraint)
         self.assertIn(AttributeName.COLOR, state.no_prefernce)
+        self.assertTrue(state.boundary_detected)
+        self.assertIn(AttributeName.COLOR, state.boundary_attributes)
+
+    def test_boundary_reply_uses_the_attribute_from_the_previous_question(self) -> None:
+        state = create_state("session")
+        update_state(state, "I need hiking boots.", turn=1)
+        state.mark_attribute_asked("material")
+
+        update_state(
+            state,
+            "It doesn't matter to me; use your judgment.",
+            turn=2,
+            asked_attribute="material",
+        )
+        decision = decide_ask(state, [])
+
+        self.assertIn(AttributeName.MATERIAL, state.no_prefernce)
+        self.assertNotEqual(decision["ask_attribute"], "material")
+
+    def test_explicit_any_value_boundary_is_recorded(self) -> None:
+        state = create_state("session")
+        update_state(state, "Any color is fine.", turn=2, asked_attribute="color")
+
+        self.assertIn(AttributeName.COLOR, state.no_prefernce)
+        self.assertTrue(state.boundary_detected)
+
+    def test_explicit_do_not_consider_boundary_is_recorded(self) -> None:
+        state = create_state("session")
+        update_state(
+            state,
+            "I do not want to consider size at all.",
+            turn=2,
+            asked_attribute="size",
+        )
+
+        self.assertIn(AttributeName.SIZE, state.no_prefernce)
+        self.assertIn(AttributeName.SIZE, state.boundary_attributes)
+
+    def test_product_text_with_any_other_is_not_a_boundary(self) -> None:
+        state = create_state("session")
+        update_state(
+            state,
+            "For that, what matters is: suitable for home and any other casual occasion.",
+            turn=2,
+            asked_attribute="style",
+        )
+
+        self.assertFalse(state.boundary_detected)
+        self.assertEqual(state.no_prefernce, [])
+        self.assertIn(AttributeName.FEATURE, state.soft_constraint)
 
     def test_negative_constraint_is_not_a_positive_requirement(self) -> None:
         state = create_state("session")

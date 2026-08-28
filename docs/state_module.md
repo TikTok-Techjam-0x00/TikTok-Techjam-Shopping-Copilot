@@ -31,6 +31,8 @@ Important fields include:
 - `asked_attributes`
 - `session_id`, `user_message`, and `turn`
 - `override_detected`
+- `intent_transitions`
+- `boundary_detected` and `boundary_attributes`
 - `user_profile`
 
 The object directly implements the protocols consumed by `src/retrieval`,
@@ -44,6 +46,24 @@ category-dependent `use_case` state is removed. Generic constraints such as
 budget, size, color, and material remain unless the user replaces or rejects
 them. Soft preferences are cleared on an explicit override before new
 preferences are added.
+
+An intent change is also an override even without an explicit correction word.
+A transition from browsing to a concrete buying request replaces the exploratory
+context. A transition from buying back to browsing removes the old
+purchase-specific hard constraints before applying the new browsing target.
+
+## Boundary behavior
+
+When a clarification answer says that an attribute does not matter, the state
+records it in `no_prefernce` and `boundary_attributes`, removes any existing
+hard/soft value for that attribute, and exposes `boundary_detected` for
+diagnostics. The Dialogue module reads `no_prefernce`, so it will not ask the
+same attribute again.
+
+Supported English boundary forms include `no preference`, `any color is fine`,
+`it doesn't matter`, `I don't care`, `I do not want to consider size`, and
+`use your judgment`. A concrete rejection such as `not leather` remains a
+`rejected_values` constraint rather than being treated as a boundary.
 
 ## Verification
 
