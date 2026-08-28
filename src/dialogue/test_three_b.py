@@ -4,6 +4,7 @@ import unittest
 from inspect import signature
 from types import SimpleNamespace
 
+from src.attribute import AttributeName, AttributeValue
 from src.dialogue.three_b import (
     BASE_PRIORITY,
     DIVERSITY_COEFFICIENT,
@@ -221,6 +222,23 @@ class AskAttributeSelectorTest(unittest.TestCase):
         decision = decide_ask(state, CANDIDATES_100)
         self.assertNotIn(decision["ask_attribute"], {"category", "budget", "color", "feature"})
 
+    def test_fit_and_others_use_three_b_attribute_names(self) -> None:
+        self.assertEqual(
+            _known_attributes(
+                {
+                    "hard_constraint": {
+                        AttributeName.FIT: AttributeValue(values=["wide"]),
+                    },
+                    "soft_constraint": {
+                        AttributeName.OTHERS: AttributeValue(
+                            details={"gift_wrapping": ["required"]}
+                        ),
+                    },
+                }
+            ),
+            {"size", "other"},
+        )
+
     def test_attribute_value_object_marks_constraint_as_known(self) -> None:
         state = {
             "turn": 2,
@@ -303,10 +321,10 @@ class AskAttributeSelectorTest(unittest.TestCase):
             {"waterproof"},
         )
 
-    def test_module_two_fit_constraint_is_known_as_style(self) -> None:
+    def test_module_two_fit_constraint_is_known_as_size(self) -> None:
         self.assertEqual(
             _known_attributes({"soft_constraint": {"fit": "relaxed"}}),
-            {"style"},
+            {"size"},
         )
 
     def test_missing_details_uses_text_fallback(self) -> None:

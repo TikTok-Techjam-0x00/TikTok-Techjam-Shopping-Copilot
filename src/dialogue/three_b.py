@@ -26,7 +26,7 @@ ATTRIBUTES = (
 )
 
 # Module 2 的共享 AttributeName 比官方 ask_attribute 更细；3B 在边界处统一映射。
-ATTRIBUTE_NAME_ALIASES = {"others": "other", "fit": "style"}
+ATTRIBUTE_NAME_ALIASES = {"others": "other", "fit": "size"}
 
 BASE_PRIORITY = {
     "category": 90.0,
