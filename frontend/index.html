@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Shopping Copilot hackathon demonstration">
+  <title>Shopping Copilot · Live Agent Demo</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40" role="img"><path d="M11 11h18l-2 19H13L11 11Z"/><path d="M15 11a5 5 0 0 1 10 0"/><circle cx="17" cy="20" r="1.5"/><circle cx="23" cy="20" r="1.5"/></svg>
+        </div>
+        <div>
+          <div class="eyebrow">TECHJAM 2026 · TRACK 4</div>
+          <h1>Shopping Copilot</h1>
+        </div>
+      </div>
+
+      <div class="pipeline" id="pipeline" aria-label="Agent architecture">
+        <span class="pipeline-node">Message</span><i>→</i>
+        <span class="pipeline-node">State</span><i>→</i>
+        <span class="pipeline-node">Retrieval</span><i>→</i>
+        <span class="pipeline-node">Reranking</span><i>→</i>
+        <span class="pipeline-node">Dialogue</span><i>→</i>
+        <span class="pipeline-node">Results</span>
+      </div>
+
+      <div class="header-actions">
+        <div class="mode-switch" role="group" aria-label="Frontend mode">
+          <button class="active" id="demoModeButton" type="button">Demo</button>
+          <button id="developerModeButton" type="button">Developer</button>
+        </div>
+        <div class="live-status"><span></span> Live Agent</div>
+        <button class="secondary-button" id="newSessionButton" type="button">New Session</button>
+      </div>
+    </header>
+
+    <div class="session-strip demo-surface">
+      <span>SESSION</span>
+      <code id="sessionId">Starting…</code>
+      <span class="turn-pill">TURN <strong id="turnCount">0</strong> / 10</span>
+      <span class="scenario-pill" id="demoScenarioLabel">NO SAMPLE</span>
+      <span class="processing-status" id="processingStatus" aria-live="polite"></span>
+    </div>
+
+    <main class="workspace demo-surface">
+      <section class="panel conversation-panel" aria-labelledby="conversationTitle">
+        <div class="panel-heading">
+          <div>
+            <span class="section-number">01</span>
+            <h2 id="conversationTitle">Conversation</h2>
+          </div>
+          <span class="panel-caption">Multi-turn context</span>
+        </div>
+        <div class="conversation" id="conversation" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <div class="welcome-icon">✦</div>
+            <h3>What are you shopping for?</h3>
+            <p>Describe what you need. The agent will refine your intent across turns.</p>
+            <div class="example-prompts" id="examplePrompts">
+              <button type="button">Running shoes under $100</button>
+              <button type="button">A black jacket for everyday wear</button>
+              <button type="button">Comfortable shoes for walking</button>
+              <button type="button">I'm looking for something but I'm still exploring</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel recommendations-panel" aria-labelledby="recommendationsTitle">
+        <div class="panel-heading">
+          <div>
+            <span class="section-number">02</span>
+            <h2 id="recommendationsTitle">Recommendations</h2>
+          </div>
+          <span class="result-count" id="resultCount">Awaiting your brief</span>
+        </div>
+        <div class="recommendations" id="recommendations">
+          <div class="empty-state">
+            <div class="empty-grid" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h3>Real catalog results appear here</h3>
+            <p>Recommendations are retrieved and reranked by the existing Shopping Copilot pipeline.</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel state-panel" aria-labelledby="stateTitle">
+        <div class="panel-heading">
+          <div>
+            <span class="section-number">03</span>
+            <h2 id="stateTitle">Agent State</h2>
+          </div>
+          <span class="state-live">Structured</span>
+        </div>
+        <div class="state-content" id="stateContent">
+          <div class="state-placeholder">
+            <div class="radar" aria-hidden="true"><span></span></div>
+            <p>State will update as the agent learns your preferences.</p>
+          </div>
+        </div>
+        <details class="developer-data" id="developerData">
+          <summary>Developer Data <span>JSON</span></summary>
+          <div class="developer-tabs">
+            <button class="active" type="button" data-debug-tab="response">Response</button>
+            <button type="button" data-debug-tab="state">State</button>
+          </div>
+          <pre id="developerJson">No response yet.</pre>
+        </details>
+      </aside>
+    </main>
+
+    <footer class="composer-wrap demo-surface">
+      <div class="evaluator-controller">
+        <div class="eval-controller-copy">
+          <span>OFFICIAL EVALUATOR FLOW</span>
+          <strong id="demoRunStatus">Select a public sample to begin</strong>
+        </div>
+        <label>PUBLIC SAMPLE
+          <select id="demoSampleSelect"><option>Loading samples…</option></select>
+        </label>
+        <button class="eval-secondary" id="startDemoButton" type="button">Start Sample</button>
+        <button class="eval-secondary" id="nextDemoTurnButton" type="button" disabled>Next Turn</button>
+        <button class="send-button eval-auto" id="autoRunButton" type="button" disabled>
+          <span>Auto Run</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg>
+        </button>
+      </div>
+      <form id="messageForm" hidden><textarea id="messageInput"></textarea><button id="sendButton" type="submit"></button></form>
+      <div class="error-toast" id="errorToast" role="alert"></div>
+    </footer>
+
+    <main class="developer-workspace" id="developerMode" hidden>
+      <header class="dev-toolbar">
+        <div>
+          <span class="dev-kicker">PIPELINE INSPECTOR</span>
+          <h2>Developer Mode</h2>
+          <span class="dev-outcome pending" id="devScenarioOutcome">AWAITING RESULT</span>
+        </div>
+        <div class="dev-session-meta">
+          <span>SESSION <code id="devSessionId">Starting…</code></span>
+          <span>COMMITTED TURN <strong id="devCommittedTurn">0</strong> / 10</span>
+          <span>ACTIVE TURN <strong id="devActiveTurn">—</strong></span>
+        </div>
+        <label class="history-select">TURN HISTORY
+          <select id="devHistory"><option value="">Current turn</option></select>
+        </label>
+        <label class="history-select">PUBLIC SAMPLE
+          <select id="devSampleSelect"><option>Loading samples…</option></select>
+        </label>
+        <button class="secondary-button" id="newDevSessionButton" type="button">New Dev Session</button>
+      </header>
+
+      <div class="dev-grid">
+        <aside class="dev-card dev-pipeline-card">
+          <div class="dev-card-heading"><span>Execution pipeline</span><small>Click to inspect</small></div>
+          <div class="dev-stage-list" id="devStageList">
+            <button class="dev-stage active" data-stage="input" type="button"><i>1</i><span><strong>Input</strong><small>Not started</small></span><b>○</b></button>
+            <button class="dev-stage" data-stage="state" type="button"><i>2</i><span><strong>State Update</strong><small>Not run</small></span><b>○</b></button>
+            <button class="dev-stage" data-stage="query" type="button"><i>3</i><span><strong>Retrieval Query</strong><small>Not run</small></span><b>○</b></button>
+            <button class="dev-stage" data-stage="retrieval" type="button"><i>4</i><span><strong>Retrieval</strong><small>Not run</small></span><b>○</b></button>
+            <button class="dev-stage" data-stage="reranking" type="button"><i>5</i><span><strong>Reranking</strong><small>Not run</small></span><b>○</b></button>
+            <button class="dev-stage" data-stage="dialogue" type="button"><i>6</i><span><strong>Dialogue</strong><small>Not run</small></span><b>○</b></button>
+            <button class="dev-stage" data-stage="response" type="button"><i>7</i><span><strong>Final Response</strong><small>Not run</small></span><b>○</b></button>
+          </div>
+          <div class="dev-turn-input">
+            <label for="devMessageInput">USER MESSAGE</label>
+            <textarea id="devMessageInput" rows="3" placeholder="Select a public sample…" readonly></textarea>
+            <button class="dev-primary" id="startDevTurnButton" type="button">Load Evaluator Turn</button>
+          </div>
+        </aside>
+
+        <section class="dev-card dev-inspector-card">
+          <div class="dev-card-heading inspector-heading">
+            <div><span id="inspectorStageName">INPUT</span><small id="inspectorImplementation">Waiting for a developer turn</small></div>
+            <div class="stage-status not-run" id="inspectorStatus">NOT RUN</div>
+          </div>
+          <div class="dev-inspector" id="devInspector">
+            <div class="dev-empty">
+              <span>{ }</span>
+              <h3>Start a turn to inspect the pipeline</h3>
+              <p>Each step executes the real Python component once and stores its structured output.</p>
+            </div>
+          </div>
+        </section>
+
+        <aside class="dev-card dev-parameters-card">
+          <div class="dev-card-heading"><span>Parameters</span><small>Read only</small></div>
+          <div class="parameter-list" id="devParameters">
+            <div><span>Session ID</span><code>Not started</code></div>
+            <div><span>Turn</span><strong>—</strong></div>
+            <div><span>top_k</span><strong>10</strong></div>
+            <div><span>Retrieval k</span><strong>100</strong></div>
+          </div>
+          <div class="trace-summary">
+            <span>LOCAL EXECUTION TIME</span>
+            <div id="devTiming"><p>Run stages to collect timing.</p></div>
+          </div>
+          <div class="dev-guardrail">
+            <strong>Frontend-only trace</strong>
+            <p>Calls existing components. No algorithm or configuration files are changed.</p>
+          </div>
+        </aside>
+      </div>
+
+      <footer class="dev-actions">
+        <div class="dev-action-status" id="devActionStatus">Start a turn, then advance one real pipeline stage at a time.</div>
+        <button class="dev-ghost" id="restartDevTurnButton" type="button" disabled>Restart Turn</button>
+        <button class="dev-ghost" id="runNextButton" type="button" disabled>Run Next Step</button>
+        <button class="dev-primary" id="runAllButton" type="button" disabled>Run Current Turn</button>
+        <button class="dev-commit" id="commitTurnButton" type="button" disabled>Commit &amp; Load Next</button>
+      </footer>
+    </main>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
