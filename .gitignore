@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 .env
 results.json
+!results_history/**/results.json
 artifacts/
 results-*.json
 data/catalog.jsonl
