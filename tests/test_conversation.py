@@ -33,6 +33,23 @@ class ConversationStateTest(unittest.TestCase):
         self.assertNotIn("running", retrieval_query(state))
         self.assertTrue(state.override_detected)
 
+    def test_requirement_override_does_not_replace_category_with_is_prefix(self) -> None:
+        state = create_state("session")
+        update_state(state, "I'm looking for shoes loafers and slip-ons.", turn=1)
+
+        update_state(
+            state,
+            "Actually, ignore my earlier preference. What I need is: leather.",
+            turn=2,
+        )
+
+        self.assertEqual(state.category, "shoes loafers and slip-ons")
+        self.assertEqual(
+            state.hard_constraint[AttributeName.MATERIAL].values,
+            ["leather"],
+        )
+        self.assertNotEqual(state.category, "is: leather")
+
     def test_browsing_prompt_routes_to_browsing(self) -> None:
         state = create_state("session")
 

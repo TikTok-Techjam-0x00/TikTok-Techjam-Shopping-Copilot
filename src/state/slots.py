@@ -19,7 +19,7 @@ NO_PREFERENCE_RE = re.compile(
 BUDGET_RE = re.compile(r"(?:under|below|less than|no more than|up to|max(?:imum)?)\s*[$£€]?\s*(\d+(?:\.\d+)?)", re.I)
 MONEY_RE = re.compile(r"[$£€]\s*(\d+(?:\.\d+)?)")
 CATEGORY_PATTERNS = (
-    re.compile(r"(?:i(?:'m| am) looking for|i need|i want|find me|show me)\s+(?:an?\s+)?(.+?)(?=\.|,|;|\bunder\b|\bbelow\b|\bwith\b|\bthat\b|$)", re.I),
+    re.compile(r"(?:i(?:'m| am) looking for|i need(?!\s+is\s*:)|i want|find me|show me)\s+(?:an?\s+)?(.+?)(?=\.|,|;|\bunder\b|\bbelow\b|\bwith\b|\bthat\b|$)", re.I),
     re.compile(r"(?:change that to|instead(?:,)?(?: i need)?|now i need)\s*:?[ ]*(?:an?\s+)?(.+?)(?=\.|,|;|$)", re.I),
 )
 ATTRIBUTE_ALIASES = {"colour": "color", "price": "budget", "price_max": "budget"}
