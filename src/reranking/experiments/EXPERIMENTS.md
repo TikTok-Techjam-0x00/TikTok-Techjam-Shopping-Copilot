@@ -19,12 +19,15 @@ artifacts/reranking_replay/<replay-data-version>/results/<experiment-id>/
 | `RR-000` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `d1fceef` | 无；保持 Retrieval 顺序 | 无 | 无 / 无 | 无 | Diversity=无；Profile=无 | 0.683959 / 0.506699 | 0 / 0 | 0.318366 | 0.631889 | 0.156 / 0.241 ms | **16.001 s** | `results/RR-000/`；Retrieval control |
 | `RR-001` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `7731c15` | Buying=H2 Feasibility Tier；Browsing=H1 Soft Penalty | S1 local Rule/Fuzzy | 结构化 hard/soft，均为空时使用当前消息 / Item 属性与限长 observations | F1 intent-aware 手工线性融合 | D1 无多样性；Profile lexical | **0.791126 / 0.585244** | **171 / 14** | **0.147763** | **0.716910** | 378.363 / 1396.241 ms | 00:17:04（包含同次 RR-000 control） | `results/RR-001/`；整体提升，下一步检查 Intent Override 回退与延迟 |
 | `RR-002` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `c319c18` | 旧版任一 violation 二元惩罚；无 H1/H2 | 初版 exact token overlap；无 fuzzy/model | 直接读取当前结构化 State / 属性字段 + title/categories/features/description | 初版 intent-aware 线性权重（`799e8c1`） | Diversity=无；Profile exact token | 0.703754 / 0.512632 | 30 / 1 | 0.323881 | 0.636383 | 39.710 / 68.472 ms | **97.346 s** | `results/RR-002/`；仅略优于 Retrieval，明显弱于 RR-001，且 hard violation 略升 |
+| `RR-003` | 完成 / 2026-08-29 | `public200-git80e002e` | `80e002e` / `80e002e` | 无；保持 Retrieval 顺序 | 无 | 无 / 无 | 无 | Diversity=无；Profile=无；生产 3B baseline | 0.664122 / 0.484044 | 0 / 0 | 0.218054 | 0.646763 | 0.148 / 0.209 ms | **15.257 s** | `results/RR-003/`；新 State/Retrieval Replay control，Intent Override coverage 明显恢复 |
 
 ## 四类场景对照
 
 以下数值由同一版 `public200-git0ad81a1` Replay 的已保存
 `case_results.jsonl.gz` 重新汇总，不重新执行 Reranker。`RR-000` 是 Retrieval
 control，`RR-002` 是最初版 SimpleReranker，`RR-001` 是当前 S1 Rule/Fuzzy。
+这些数值只能在旧 Replay 内横向比较，不能直接与新 Replay 的 `RR-003` 判断
+Reranker 优劣。
 
 ### Session 级结果
 
@@ -76,6 +79,28 @@ control，`RR-002` 是最初版 SimpleReranker，`RR-001` 是当前 S1 Rule/Fuzz
 - **Coverage@100** 是冻结的 Retrieval 输入，同一场景下三个 Reranker 完全相同，不能
   通过调 Reranking 参数提升。Intent Override 的 0.288288 首先指向 Retrieval/State，
   不是 Top 10 排序本身。
+
+## Replay 数据版本更新
+
+`public200-git80e002e` 使用 commit `80e002e` 重新录制，共 200 个 session、2000 个
+turn case，其中 1922 个可评分。Catalog 和 Public Set 的输入哈希与旧版完全一致；
+变化来自 State `560b92b` 和 Retrieval `4eee3d6`。录制时 3B 使用生产入口
+`src/dialogue/three_b.py`，即实验目录中的 behavior-identical baseline，不使用其他
+3B 消融版本。
+
+| Retrieval control | 旧 `RR-000` / `0ad81a1` | 新 `RR-003` / `80e002e` |
+| --- | ---: | ---: |
+| Overall Coverage@100 | 0.762227 | **0.817898** |
+| Overall Session HitRate@10 | 0.770000 | **0.790000** |
+| Overall Replay Score | 0.631889 | **0.646763** |
+| Intent Override Coverage@100 | 0.288288 | **0.770270** |
+| Intent Override Session HitRate@10 | 0.500000 | **0.633333** |
+| Intent Override Hard violation@10 | 1.000000 | **0.131532** |
+| Intent Override Replay Score | 0.415667 | **0.514825** |
+
+Browsing、Buying、Boundary 的 Retrieval control 数值保持不变，主要变化集中在
+Intent Override。之后的新 Reranker 实验应统一使用 `public200-git80e002e`，并从
+`RR-004` 开始编号；旧 `RR-000`～`RR-002` 仅保留为旧 Replay 的历史对照。
 
 ## 字段填写规则
 
