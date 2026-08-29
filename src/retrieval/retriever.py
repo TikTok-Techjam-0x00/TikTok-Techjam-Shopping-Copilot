@@ -102,6 +102,24 @@ class Retriever:
         )
 
     @classmethod
+    def sota_default(cls, catalog_path: str) -> Retriever:
+        """Return the measured SOTA Hybrid, with a startup BM25 fallback.
+
+        The Hybrid itself also falls back per query when the embedding service
+        is temporarily unavailable.  This outer fallback covers missing API
+        configuration, dependencies, or product embedding cache at startup.
+        """
+        try:
+            from .embedding import OpenAIEmbeddingEncoder
+
+            return cls.intent_routed_hybrid_weighted(
+                catalog_path,
+                OpenAIEmbeddingEncoder.from_env(),
+            )
+        except Exception:
+            return cls.bm25_intent_routed(catalog_path)
+
+    @classmethod
     def hybrid(
         cls,
         bm25: RetrievalStrategy,
@@ -175,6 +193,127 @@ class Retriever:
                 alpha=alpha,
                 fallback_to_bm25=fallback_to_bm25,
             ),
+        )
+
+    @classmethod
+    def bm25_intent_routed_dense_weighted(
+        cls,
+        catalog_path: str,
+        encoder: EmbeddingEncoder,
+        cache_dir: str | Path | None = None,
+        *,
+        text_version: str = DEFAULT_TEXT_VERSION,
+        browsing_text_version: str | ProductTextConfig = "title_category_v1",
+        browsing_max_turn: int | None = 1,
+        source_k: int = 200,
+        alpha: float = 0.7,
+        query_embedding_mode: str = "query_instruction",
+        query_instruction: str | None = None,
+        fallback_to_bm25: bool = True,
+    ) -> Retriever:
+        """Build the RET-008 winner: routed BM25 + Dense weighted fusion.
+
+        Buying and later Browsing turns use ``text_version``.  Only the first
+        Browsing turn uses the concise text representation.  The defaults are
+        the best configuration measured on the public multi-turn Retrieval
+        evaluation; Dense failures retain the deterministic BM25 route.
+        """
+        from .dense import DenseRetriever
+        from .embedding import default_embedding_cache_dir
+        from .hybrid import HybridConfig, HybridRetriever
+        from .routing import IntentRoutedRetriever, IntentRoutingConfig
+
+        catalog = Catalog.load(catalog_path)
+        resolved_cache = cache_dir or default_embedding_cache_dir(
+            encoder.model,
+            encoder.dimension,
+            text_version,
+        )
+        bm25 = IntentRoutedRetriever(
+            BM25Retriever(catalog, text_version=text_version),
+            BM25Retriever(catalog, text_version=browsing_text_version),
+            config=IntentRoutingConfig(browsing_max_turn=browsing_max_turn),
+        )
+        dense = DenseRetriever(
+            catalog,
+            encoder,
+            resolved_cache,
+            text_version=text_version,
+            query_embedding_mode=query_embedding_mode,
+            query_instruction=query_instruction,
+        )
+        return cls(
+            HybridRetriever(
+                bm25,
+                dense,
+                config=HybridConfig(
+                    method="weighted",
+                    source_k=source_k,
+                    alpha=alpha,
+                    fallback_to_bm25=fallback_to_bm25,
+                ),
+            )
+        )
+
+    @classmethod
+    def intent_routed_hybrid_weighted(
+        cls,
+        catalog_path: str,
+        encoder: EmbeddingEncoder,
+        cache_dir: str | Path | None = None,
+        *,
+        text_version: str = DEFAULT_TEXT_VERSION,
+        browsing_text_version: str | ProductTextConfig = "title_category_v1",
+        browsing_max_turn: int | None = 1,
+        source_k: int = 200,
+        alpha: float = 0.7,
+        query_embedding_mode: str = "query_instruction",
+        query_instruction: str | None = None,
+        fallback_to_bm25: bool = True,
+    ) -> Retriever:
+        """Route Browsing warm-start outside the detailed Hybrid strategy.
+
+        The first Browsing turn uses concise BM25 alone, matching the measured
+        SOTA lexical policy without reintroducing long-field Dense noise. Buying,
+        unknown intent, and later Browsing turns use detailed BM25 + Dense.
+        """
+        from .dense import DenseRetriever
+        from .embedding import default_embedding_cache_dir
+        from .hybrid import HybridConfig, HybridRetriever
+        from .routing import IntentRoutedRetriever, IntentRoutingConfig
+
+        catalog = Catalog.load(catalog_path)
+        resolved_cache = cache_dir or default_embedding_cache_dir(
+            encoder.model,
+            encoder.dimension,
+            text_version,
+        )
+        detailed_bm25 = BM25Retriever(catalog, text_version=text_version)
+        browsing_bm25 = BM25Retriever(catalog, text_version=browsing_text_version)
+        dense = DenseRetriever(
+            catalog,
+            encoder,
+            resolved_cache,
+            text_version=text_version,
+            query_embedding_mode=query_embedding_mode,
+            query_instruction=query_instruction,
+        )
+        detailed_hybrid = HybridRetriever(
+            detailed_bm25,
+            dense,
+            config=HybridConfig(
+                method="weighted",
+                source_k=source_k,
+                alpha=alpha,
+                fallback_to_bm25=fallback_to_bm25,
+            ),
+        )
+        return cls(
+            IntentRoutedRetriever(
+                detailed_hybrid,
+                browsing_bm25,
+                config=IntentRoutingConfig(browsing_max_turn=browsing_max_turn),
+            )
         )
 
     @classmethod

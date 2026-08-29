@@ -220,6 +220,9 @@ class HybridRetriever:
         self.bm25 = bm25
         self.dense = dense
         self.config = config or HybridConfig()
+        bm25_catalog = getattr(bm25, "catalog", None)
+        dense_catalog = getattr(dense, "catalog", None)
+        self.catalog = bm25_catalog if bm25_catalog is dense_catalog else None
 
     def retrieve_sources(
         self,

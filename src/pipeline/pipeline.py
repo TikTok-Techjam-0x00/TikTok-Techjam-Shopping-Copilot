@@ -28,7 +28,7 @@ class Pipeline:
         semantic_policy: SemanticPolicy | None = None,
     ) -> None:
         self.catalog_path = Path(catalog_path)
-        self.retriever = Retriever.bm25_intent_routed(str(self.catalog_path))
+        self.retriever = Retriever.sota_default(str(self.catalog_path))
         self.reranker = QwenReranker(use_local_fallback=True)
         self.semantic_resolver = semantic_resolver
         self.semantic_policy = semantic_policy
