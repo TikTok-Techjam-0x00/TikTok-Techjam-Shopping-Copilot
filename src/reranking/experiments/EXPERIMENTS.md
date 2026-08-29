@@ -21,6 +21,7 @@ artifacts/reranking_replay/<replay-data-version>/results/<experiment-id>/
 | `RR-002` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `c319c18` | 旧版任一 violation 二元惩罚；无 H1/H2 | 初版 exact token overlap；无 fuzzy/model | 直接读取当前结构化 State / 属性字段 + title/categories/features/description | 初版 intent-aware 线性权重（`799e8c1`） | Diversity=无；Profile exact token | 0.703754 / 0.512632 | 30 / 1 | 0.323881 | 0.636383 | 39.710 / 68.472 ms | **97.346 s** | `results/RR-002/`；仅略优于 Retrieval，明显弱于 RR-001，且 hard violation 略升 |
 | `RR-003` | 完成 / 2026-08-29 | `public200-git80e002e` | `80e002e` / `80e002e` | 无；保持 Retrieval 顺序 | 无 | 无 / 无 | 无 | Diversity=无；Profile=无；生产 3B baseline | 0.664122 / 0.484044 | 0 / 0 | 0.218054 | 0.646763 | 0.148 / 0.209 ms | **15.257 s** | `results/RR-003/`；新 State/Retrieval Replay control，Intent Override coverage 明显恢复 |
 | `RR-004` | 完成 / 2026-08-29 | `public200-git80e002e` | `80e002e` / `fd18213` | Buying=H2 Feasibility Tier；Browsing=H1 Soft Penalty | S1 local Rule/Fuzzy | 结构化 hard/soft，均为空时使用当前消息 / Item 属性与限长 observations | F1 intent-aware 手工线性融合 | D1 无多样性；Profile lexical；生产 3B baseline | **0.770356 / 0.563447** | **180 / 13** | **0.033039** | **0.740699** | 374.494 / 1370.143 ms | **1016.591 s** | `results/RR-004/`；新 Replay 当前 S1 主基准，四类场景均优于 RR-003 |
+| `RR-005` | 完成 / 2026-08-29 | `public200-git80e002e` | `80e002e` / `82cc4b3` | 与 RR-004 完全相同 | S1-fast；公式等价的有界 product/text/score cache | 与 RR-004 完全相同；缓存商品侧标准化结果 / 完全相同 | 与 RR-004 完全相同 | Cache=8192/131072/131072；200,000 候选严格等价 | **0.770356 / 0.563447** | **180 / 13** | **0.033039** | **0.740699** | **199.621 / 724.412 ms** | **522.013 s** | `results/RR-005/`；质量完全不变，总耗时下降 48.651%，作为新的 S1 性能基准 |
 
 ## 四类场景对照
 
@@ -101,7 +102,7 @@ turn case，其中 1922 个可评分。Catalog 和 Public Set 的输入哈希与
 
 Browsing、Buying、Boundary 的 Retrieval control 数值保持不变，主要变化集中在
 Intent Override。之后的新 Reranker 实验应统一使用 `public200-git80e002e`，并从
-`RR-005` 开始编号；旧 `RR-000`～`RR-002` 仅保留为旧 Replay 的历史对照。
+`RR-006` 开始编号；旧 `RR-000`～`RR-002` 仅保留为旧 Replay 的历史对照。
 
 ### 新 Replay 上的 Reranker 增益
 
@@ -120,6 +121,26 @@ Intent Override Session HitRate 从 0.466667 升至 0.666667，Replay Score 从
 0.400000 升至 0.558595。整体 Conditional Hit/MRR 受新增 Override 难例的分母影响
 不宜直接比较，但 Top 10 绝对命中 case 从 1159 增至 1211，Overall Session
 HitRate 从 0.865000 升至 0.895000。
+
+### S1-fast 等价性能优化
+
+`RR-005` 只缓存 Catalog 商品文本、标准化 token 和重复 fuzzy comparison；排序
+公式、约束策略、融合权重及输入均与 `RR-004` 相同。独立等价检查覆盖 2000 个 case、
+200,000 个候选，逐一比较完整 Top100 的 `parent_asin`、rank、六位小数 score、
+matched 和 violation，结果零差异。
+
+| 指标 | RR-004 S1 | RR-005 S1-fast | 变化 |
+| --- | ---: | ---: | ---: |
+| Mean latency | 501.412 ms | **254.069 ms** | **-49.329%** |
+| P50 latency | 374.494 ms | **199.621 ms** | **-46.696%** |
+| P95 latency | 1370.143 ms | **724.412 ms** | **-47.129%** |
+| Max latency | 2380.907 ms | **1511.026 ms** | **-36.536%** |
+| 整体测试耗时 | 1016.591 s | **522.013 s** | **-48.651%** |
+| Replay TechnicalScore | 0.740699 | **0.740699** | 0 |
+
+全量配对检查中，旧 S1 排序累计耗时 998.503 秒，S1-fast 为 498.212 秒，配对
+speedup 为 **2.004×**。等价报告位于 Replay 目录的
+`equivalence/RR-005.json`；之后的实验和生产默认使用 S1-fast。
 
 ## 字段填写规则
 
