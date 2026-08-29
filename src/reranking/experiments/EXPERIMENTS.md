@@ -20,6 +20,7 @@ artifacts/reranking_replay/<replay-data-version>/results/<experiment-id>/
 | `RR-001` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `7731c15` | Buying=H2 Feasibility Tier；Browsing=H1 Soft Penalty | S1 local Rule/Fuzzy | 结构化 hard/soft，均为空时使用当前消息 / Item 属性与限长 observations | F1 intent-aware 手工线性融合 | D1 无多样性；Profile lexical | **0.791126 / 0.585244** | **171 / 14** | **0.147763** | **0.716910** | 378.363 / 1396.241 ms | 00:17:04（包含同次 RR-000 control） | `results/RR-001/`；整体提升，下一步检查 Intent Override 回退与延迟 |
 | `RR-002` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `c319c18` | 旧版任一 violation 二元惩罚；无 H1/H2 | 初版 exact token overlap；无 fuzzy/model | 直接读取当前结构化 State / 属性字段 + title/categories/features/description | 初版 intent-aware 线性权重（`799e8c1`） | Diversity=无；Profile exact token | 0.703754 / 0.512632 | 30 / 1 | 0.323881 | 0.636383 | 39.710 / 68.472 ms | **97.346 s** | `results/RR-002/`；仅略优于 Retrieval，明显弱于 RR-001，且 hard violation 略升 |
 | `RR-003` | 完成 / 2026-08-29 | `public200-git80e002e` | `80e002e` / `80e002e` | 无；保持 Retrieval 顺序 | 无 | 无 / 无 | 无 | Diversity=无；Profile=无；生产 3B baseline | 0.664122 / 0.484044 | 0 / 0 | 0.218054 | 0.646763 | 0.148 / 0.209 ms | **15.257 s** | `results/RR-003/`；新 State/Retrieval Replay control，Intent Override coverage 明显恢复 |
+| `RR-004` | 完成 / 2026-08-29 | `public200-git80e002e` | `80e002e` / `fd18213` | Buying=H2 Feasibility Tier；Browsing=H1 Soft Penalty | S1 local Rule/Fuzzy | 结构化 hard/soft，均为空时使用当前消息 / Item 属性与限长 observations | F1 intent-aware 手工线性融合 | D1 无多样性；Profile lexical；生产 3B baseline | **0.770356 / 0.563447** | **180 / 13** | **0.033039** | **0.740699** | 374.494 / 1370.143 ms | **1016.591 s** | `results/RR-004/`；新 Replay 当前 S1 主基准，四类场景均优于 RR-003 |
 
 ## 四类场景对照
 
@@ -100,7 +101,25 @@ turn case，其中 1922 个可评分。Catalog 和 Public Set 的输入哈希与
 
 Browsing、Buying、Boundary 的 Retrieval control 数值保持不变，主要变化集中在
 Intent Override。之后的新 Reranker 实验应统一使用 `public200-git80e002e`，并从
-`RR-004` 开始编号；旧 `RR-000`～`RR-002` 仅保留为旧 Replay 的历史对照。
+`RR-005` 开始编号；旧 `RR-000`～`RR-002` 仅保留为旧 Replay 的历史对照。
+
+### 新 Replay 上的 Reranker 增益
+
+`RR-003` 与 `RR-004` 使用相同 Replay，下面的差异只来自 S1 Rule/Fuzzy Reranker。
+
+| 场景 | RR-003 HitRate / MRR / MTTC / Score | RR-004 HitRate / MRR / MTTC / Score | Score Δ |
+| --- | ---: | ---: | ---: |
+| Browsing | 0.875000 / 0.535432 / 4.187500 / 0.734379 | **0.975000 / 0.606334 / 3.162500 / 0.826150** | **+0.091771** |
+| Buying | 0.762500 / 0.454683 / 6.575000 / 0.606155 | **0.900000 / 0.555179 / 5.562500 / 0.725304** | **+0.119149** |
+| Boundary | 0.800000 / 0.575000 / 6.300000 / 0.666500 | **0.900000 / 0.595238 / 6.100000 / 0.726571** | **+0.060071** |
+| Intent Override | 0.633333 / 0.442751 / 7.733333 / 0.514825 | **0.666667 / 0.513095 / 7.433333 / 0.558595** | **+0.043770** |
+| Overall | 0.790000 / 0.491208 / 5.780000 / 0.646763 | **0.895000 / 0.571331 / 4.910000 / 0.740699** | **+0.093936** |
+
+相对旧 Replay 的 `RR-001`，`RR-004` 的 Browsing、Buying、Boundary 结果完全相同；
+Intent Override Session HitRate 从 0.466667 升至 0.666667，Replay Score 从
+0.400000 升至 0.558595。整体 Conditional Hit/MRR 受新增 Override 难例的分母影响
+不宜直接比较，但 Top 10 绝对命中 case 从 1159 增至 1211，Overall Session
+HitRate 从 0.865000 升至 0.895000。
 
 ## 字段填写规则
 
