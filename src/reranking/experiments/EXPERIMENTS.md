@@ -16,7 +16,7 @@ artifacts/reranking_replay/<replay-data-version>/results/<experiment-id>/
 
 | 编号 | 状态 / 日期 | Replay 数据版本 | 数据 Git / 评测 Git | Hard Constraint 策略 | 语义相关度模型 | 文本序列化（Query / Product） | Score Fusion | 其他变量 | Cond. Hit / MRR@10 | Promotion / Demotion | Hard violation@10 | Replay TechnicalScore | P50 / P95 | 整体测试耗时 | 结果目录 / 结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `RR-000` | 待重新登记 | `public200-git0ad81a1` | `0ad81a1` / 待运行 | 无；保持 Retrieval 顺序 | 无 | 无 / 无 | 无 | Diversity=无；Profile=无 | 0.683959 / 0.506699（旧报告） | 0 / 0 | 0.318366 | 0.631889 | 0.138 / 0.193 ms（旧报告） | 待独立运行 | 待生成 `results/RR-000/`；Retrieval control |
+| `RR-000` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `d1fceef` | 无；保持 Retrieval 顺序 | 无 | 无 / 无 | 无 | Diversity=无；Profile=无 | 0.683959 / 0.506699 | 0 / 0 | 0.318366 | 0.631889 | 0.156 / 0.241 ms | **16.001 s** | `results/RR-000/`；Retrieval control |
 | `RR-001` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `7731c15` | Buying=H2 Feasibility Tier；Browsing=H1 Soft Penalty | S1 local Rule/Fuzzy | 结构化 hard/soft，均为空时使用当前消息 / Item 属性与限长 observations | F1 intent-aware 手工线性融合 | D1 无多样性；Profile lexical | **0.791126 / 0.585244** | **171 / 14** | **0.147763** | **0.716910** | 378.363 / 1396.241 ms | 00:17:04（包含同次 RR-000 control） | `results/RR-001/`；整体提升，下一步检查 Intent Override 回退与延迟 |
 
 ## 字段填写规则
@@ -64,4 +64,4 @@ artifacts/reranking_replay/<replay-data-version>/results/<experiment-id>/
 
 `RR-001` 的旧报告最初同时运行了 Retrieval control 与 S1，因此整体耗时是两臂
 合计。新接口已经限制一个编号只能运行一个配置，之后每行都会拥有独立、准确的
-整体测试耗时。`RR-000` 将使用新接口重新运行后补齐独立目录与耗时。
+整体测试耗时。`RR-000` 已使用新接口重新运行并作为目录和时间记录的标准示例。
