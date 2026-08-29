@@ -40,6 +40,50 @@ class ShoppingStateTest(unittest.TestCase):
         self.assertEqual(state.hard_constraint[AttributeName.COLOR].values, ["black"])
         self.assertNotIn(AttributeName.COLOR, state.no_prefernce)
 
+    def test_override_starts_a_new_epoch_and_preserves_provenance(self) -> None:
+        state = ShoppingState("session")
+        state.apply_update(
+            StateUpdate.from_raw(
+                hard_constraint={"category": "running shoes", "color": "blue"},
+            ),
+            source_turn=1,
+        )
+        state.mark_attribute_asked("material")
+
+        state.apply_update(
+            StateUpdate.from_raw(
+                hard_constraint={"material": "leather"},
+                override=True,
+            ),
+            source_turn=2,
+        )
+
+        material = state.constraint_provenance["hard_constraint"][
+            AttributeName.MATERIAL
+        ]
+        self.assertEqual(state.constraint_epoch, 1)
+        self.assertEqual(state.last_override_turn, 2)
+        self.assertEqual(material.source_turn, 2)
+        self.assertEqual(material.constraint_epoch, 1)
+        self.assertEqual(material.confidence, 1.0)
+        self.assertEqual(material.value.values, ["leather"])
+        self.assertEqual(state.asked_attributes, [])
+        self.assertEqual(state.asked_attributes_by_epoch[0], ["material"])
+
+    def test_superseded_constraint_is_kept_in_history(self) -> None:
+        state = ShoppingState("session")
+        state.apply_update(
+            StateUpdate.from_raw(hard_constraint={"material": "cotton"}),
+            source_turn=1,
+        )
+        state.apply_update(
+            StateUpdate.from_raw(hard_constraint={"material": "leather"}),
+            source_turn=2,
+        )
+
+        self.assertEqual(state.hard_constraint[AttributeName.MATERIAL].values, ["leather"])
+        self.assertEqual(state.constraint_history[-1].value.values, ["cotton"])
+
 
 if __name__ == "__main__":
     unittest.main()

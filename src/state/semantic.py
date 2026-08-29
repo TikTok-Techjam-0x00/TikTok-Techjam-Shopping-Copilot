@@ -210,6 +210,7 @@ def merge_rule_and_semantic(
         clear_soft_constraint=rule_update.clear_soft_constraint or (
             prefer_semantic_intent and semantic_update.clear_soft_constraint
         ),
+        confidence=min(rule_update.confidence, semantic_update.confidence),
     )
     return merged
 
@@ -425,6 +426,7 @@ class CallableSemanticResolver:
             override=bool(payload.get("override", False)),
             clear_hard_constraint=bool(payload.get("clear_hard_constraint", False)),
             clear_soft_constraint=bool(payload.get("clear_soft_constraint", False)),
+            confidence=confidence,
         )
         return SemanticResolution(update=update, confidence=confidence)
 

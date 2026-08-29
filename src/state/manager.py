@@ -110,15 +110,15 @@ def update_state(
     intent_changed = bool(state.history) and next_intent != state.intent
     effective_override = update.override or intent_changed
     update.override = effective_override
-    update.clear_soft_constraint = update.clear_soft_constraint or effective_override
     if intent_changed and next_intent == "browsing":
         update.clear_hard_constraint = True
-    state.apply_update(update)
+    effective_turn = turn if turn is not None else state.turn + 1
+    state.apply_update(update, source_turn=effective_turn)
     state.intent_confidence = final_intent.confidence
     state.intent_resolution_source = final_intent.source
     state.intent_smoothed = final_intent.smoothed
     state.user_message = user_message
-    state.turn = turn if turn is not None else state.turn + 1
+    state.turn = effective_turn
     if intent_changed:
         state.intent_transitions.append({
             "turn": state.turn,

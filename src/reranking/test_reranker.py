@@ -16,6 +16,8 @@ from src.reranking import (
     recommendations_from_ranking,
     rerank,
 )
+from src.reranking.reranker import _state_constraints
+from src.state import ShoppingState, StateUpdate
 from src.dialogue import decide_ask
 
 
@@ -137,6 +139,30 @@ class ProductModelTest(unittest.TestCase):
 
 
 class SimpleRerankerTest(unittest.TestCase):
+    def test_override_provenance_promotes_new_requirement_and_demotes_old_hard(self) -> None:
+        state = ShoppingState("session")
+        state.apply_update(
+            StateUpdate.from_raw(
+                hard_constraint={"category": "shoes", "color": "blue"},
+                soft_constraint={"style": "casual"},
+            ),
+            source_turn=1,
+        )
+        state.apply_update(
+            StateUpdate.from_raw(
+                soft_constraint={"feature": "rubber sole"},
+                override=True,
+            ),
+            source_turn=2,
+        )
+
+        hard, soft = _state_constraints(state)
+
+        self.assertIn("category", hard)
+        self.assertIn("feature", hard)
+        self.assertIn("color", soft)
+        self.assertIn("style", soft)
+
     def test_default_strategy_routes_browsing_and_buying_differently(self) -> None:
         config = RerankerStrategyConfig()
         self.assertIs(

@@ -90,6 +90,9 @@ class ShoppingStateProtocol(Protocol):
     hard_constraint: AttributeMap
     soft_constraint: AttributeMap
     no_prefernce: Sequence[AttributeName]
+    constraint_epoch: int
+    last_override_turn: int | None
+    constraint_provenance: Mapping[str, Any]
 
 
 ShoppingStateInput: TypeAlias = ShoppingStateProtocol | Mapping[str, Any]
@@ -201,6 +204,33 @@ def _no_preference_attributes(value: object) -> set[str]:
     return set()
 
 
+def _integer(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _record_value(record: object, field: str, default: object = None) -> object:
+    if isinstance(record, Mapping):
+        return record.get(field, default)
+    return getattr(record, field, default)
+
+
+def _constraint_record(
+    shopping_state: ShoppingStateInput,
+    group: str,
+    attribute: str,
+) -> object | None:
+    provenance = _state_value(shopping_state, "constraint_provenance", {})
+    if not isinstance(provenance, Mapping):
+        return None
+    records = provenance.get(group, {})
+    if not isinstance(records, Mapping):
+        return None
+    return records.get(attribute)
+
+
 def _state_constraints(
     shopping_state: ShoppingStateInput,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -219,7 +249,46 @@ def _state_constraints(
     for attribute in no_preference:
         hard.pop(attribute, None)
         soft.pop(attribute, None)
-    return hard, soft
+
+    current_epoch = _integer(_state_value(shopping_state, "constraint_epoch", 0))
+    last_override_turn = _integer(
+        _state_value(shopping_state, "last_override_turn", -1),
+        -1,
+    )
+    if current_epoch <= 0:
+        return hard, soft
+
+    effective_hard: dict[str, Any] = {}
+    effective_soft: dict[str, Any] = {}
+    for group, constraints in (
+        ("hard_constraint", hard),
+        ("soft_constraint", soft),
+    ):
+        for attribute, constraint in constraints.items():
+            record = _constraint_record(shopping_state, group, attribute)
+            record_epoch = _integer(
+                _record_value(record, "constraint_epoch", current_epoch),
+                current_epoch,
+            )
+            source_turn = _integer(_record_value(record, "source_turn", -1), -1)
+            confidence = float(_record_value(record, "confidence", 1.0) or 0.0)
+
+            # Category anchors the candidate domain even if it predates a
+            # requirement-only override. Explicit requirements from the
+            # override turn are promoted to hard matching. Older constraints
+            # remain available as soft evidence instead of being deleted.
+            is_override_requirement = (
+                last_override_turn >= 0 and source_turn == last_override_turn
+            )
+            if attribute == "category" or (
+                is_override_requirement and confidence >= 0.5
+            ):
+                effective_hard[attribute] = constraint
+            elif record_epoch == current_epoch and group == "hard_constraint":
+                effective_hard[attribute] = constraint
+            else:
+                effective_soft[attribute] = constraint
+    return effective_hard, effective_soft
 
 
 def _shopping_intent(shopping_state: ShoppingStateInput) -> str:

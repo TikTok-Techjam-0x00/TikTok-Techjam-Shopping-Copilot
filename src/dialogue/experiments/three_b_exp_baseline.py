@@ -504,6 +504,14 @@ def record_asked_attribute(
     updated = sorted(asked, key=ATTRIBUTES.index)
     if isinstance(shopping_state, MutableMapping):
         shopping_state["asked_attributes"] = updated
+        epoch = _state_value(shopping_state, "constraint_epoch", 0)
+        by_epoch = shopping_state.setdefault("asked_attributes_by_epoch", {})
+        if isinstance(by_epoch, MutableMapping):
+            by_epoch[str(epoch)] = list(updated)
+        return
+    marker = getattr(shopping_state, "mark_attribute_asked", None)
+    if callable(marker):
+        marker(attribute)
         return
     try:
         setattr(shopping_state, "asked_attributes", updated)

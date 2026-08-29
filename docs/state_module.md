@@ -32,6 +32,9 @@ Important fields include:
 - `asked_attributes`
 - `session_id`, `user_message`, and `turn`
 - `override_detected`
+- `constraint_epoch` and `last_override_turn`
+- `constraint_provenance` and `constraint_history`
+- `asked_attributes_by_epoch`
 - `intent_transitions`
 - `boundary_detected` and `boundary_attributes`
 - `semantic_fallback_*` and `semantic_validation_errors`
@@ -107,11 +110,23 @@ Pass `semantic_resolver=None` explicitly to force rule-only operation.
 
 ## Override behavior
 
+Every override increments `constraint_epoch` and records `last_override_turn`.
+Each active hard, soft, or rejected constraint has JSON-safe provenance with its
+value, source turn, epoch, and confidence. Replaced or cleared values move to
+`constraint_history` instead of losing their origin information.
+
 When a user changes category, the new category replaces the old one and stale
-category-dependent `use_case` state is removed. Generic constraints such as
-budget, size, color, and material remain unless the user replaces or rejects
-them. Soft preferences are cleared on an explicit override before new
-preferences are added.
+category-dependent `use_case` state is removed. Other constraints remain in
+State unless the user replaces or rejects them. Retrieval prioritizes the
+current category, requirements stated on the override turn, and current-epoch
+constraints; stale soft preferences are omitted from the override query. 3A
+keeps the category and explicit override requirements as hard matches while
+demoting older constraints to soft evidence.
+
+`asked_attributes` is the compatibility view for the current epoch. On an
+override it resets, while `asked_attributes_by_epoch` retains the questions
+asked in earlier epochs. This allows 3B to ask a newly relevant attribute after
+the user's goal changes without repeating questions within the same goal.
 
 An intent change is also an override even without an explicit correction word.
 A transition from browsing to a concrete buying request replaces the exploratory

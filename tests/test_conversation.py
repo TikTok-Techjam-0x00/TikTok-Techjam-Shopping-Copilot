@@ -177,6 +177,33 @@ class ConversationStateTest(unittest.TestCase):
         self.assertEqual(payload["hard_constraint"]["category"]["values"], ["black running shoes"])
         self.assertEqual(payload["hard_constraint"]["budget"]["max"], 100.0)
         self.assertEqual(payload["asked_attributes"], [])
+        self.assertEqual(payload["constraint_epoch"], 0)
+        self.assertEqual(
+            payload["constraint_provenance"]["hard_constraint"]["category"]["source_turn"],
+            1,
+        )
+
+    def test_override_query_prefers_new_epoch_and_omits_stale_soft_preference(self) -> None:
+        state = create_state("session")
+        state.apply_update(
+            StateUpdate.from_raw(
+                hard_constraint={"category": "running shoes", "color": "blue"},
+                soft_constraint={"style": "casual"},
+            ),
+            source_turn=1,
+        )
+        state.apply_update(
+            StateUpdate.from_raw(
+                hard_constraint={"material": "leather"},
+                override=True,
+            ),
+            source_turn=2,
+        )
+
+        query = retrieval_query(state)
+
+        self.assertEqual(query, "running shoes leather blue")
+        self.assertNotIn("casual", query)
 
     def test_retrieval_text_never_contains_cjk_content(self) -> None:
         state = create_state("session")

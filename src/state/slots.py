@@ -85,7 +85,7 @@ def _boundary_attribute(text: str, asked_attribute: str | None) -> str | None:
 def extract_slots(message: str, *, asked_attribute: str | None = None, is_override: bool = False) -> StateUpdate:
     text = " ".join(message.strip().split())
     if not text:
-        return StateUpdate(override=is_override, clear_soft_constraint=is_override)
+        return StateUpdate(override=is_override)
     active = _active_scope(text, is_override)
     no_preference: set[str] = set()
     raw_hard: dict[str, object] = {}
@@ -99,7 +99,6 @@ def extract_slots(message: str, *, asked_attribute: str | None = None, is_overri
             no_preference=no_preference,
             boundary_attributes={boundary_attribute},
             override=is_override,
-            clear_soft_constraint=is_override,
         )
 
     category = _extract_category(text)
@@ -146,5 +145,4 @@ def extract_slots(message: str, *, asked_attribute: str | None = None, is_overri
         soft_constraint=raw_soft,
         rejected_values=raw_rejected,
         override=is_override,
-        clear_soft_constraint=is_override,
     )

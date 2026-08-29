@@ -28,6 +28,34 @@ def _attribute_name(value: object) -> str:
     return str(raw).strip().casefold()
 
 
+def _integer(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _provenance_record(
+    state: object,
+    group: str,
+    attribute: object,
+) -> object | None:
+    provenance = _state_value(state, "constraint_provenance", {})
+    if not isinstance(provenance, Mapping):
+        return None
+    records = provenance.get(group, {})
+    if not isinstance(records, Mapping):
+        return None
+    name = _attribute_name(attribute)
+    return records.get(attribute, records.get(name))
+
+
+def _record_value(record: object, field: str, default: object = None) -> object:
+    if isinstance(record, Mapping):
+        return record.get(field, default)
+    return getattr(record, field, default)
+
+
 def _no_preference(state: object) -> set[str]:
     value = _state_value(
         state,
@@ -80,27 +108,58 @@ def _lexical_values(value: object) -> list[str]:
 
 def _active_state_terms(state: object) -> list[str]:
     excluded = _no_preference(state)
-    values: list[str] = []
+    values: list[tuple[int, list[str]]] = []
+    current_epoch = _integer(_state_value(state, "constraint_epoch", 0))
+    last_override_turn = _integer(
+        _state_value(state, "last_override_turn", -1),
+        -1,
+    )
 
     for field in _DIRECT_STATE_FIELDS:
         if field not in excluded:
-            values.extend(_lexical_values(_state_value(state, field)))
+            direct_values = _lexical_values(_state_value(state, field))
+            if direct_values:
+                values.append((0, direct_values))
 
     for field in _CONSTRAINT_FIELDS:
         constraints = _state_value(state, field)
         if not isinstance(constraints, Mapping):
             continue
         for attribute, constraint in constraints.items():
-            if _attribute_name(attribute) not in excluded:
-                values.extend(_lexical_values(constraint))
+            name = _attribute_name(attribute)
+            if name in excluded:
+                continue
+            lexical = _lexical_values(constraint)
+            if not lexical:
+                continue
+            record = _provenance_record(state, field, attribute)
+            record_epoch = _integer(
+                _record_value(record, "constraint_epoch", current_epoch),
+                current_epoch,
+            )
+            source_turn = _integer(_record_value(record, "source_turn", -1), -1)
+            if name == "category":
+                priority = 0
+            elif source_turn == last_override_turn and last_override_turn >= 0:
+                priority = 1
+            elif record_epoch == current_epoch:
+                priority = 2
+            elif field == "soft_constraint" and current_epoch > 0:
+                # Stale soft preferences remain in State for diagnostics and 3A,
+                # but do not compete equally in an override retrieval query.
+                continue
+            else:
+                priority = 3
+            values.append((priority, lexical))
 
     result: list[str] = []
     seen: set[str] = set()
-    for value in values:
-        key = value.casefold()
-        if key not in seen:
-            seen.add(key)
-            result.append(value)
+    for _, group_values in sorted(values, key=lambda entry: entry[0]):
+        for value in group_values:
+            key = value.casefold()
+            if key not in seen:
+                seen.add(key)
+                result.append(value)
     return result
 
 
