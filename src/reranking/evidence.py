@@ -12,8 +12,10 @@ from ..item import Candidate, Candidates10, RankedCandidate
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+_FRAGMENT_SEPARATOR_RE = re.compile(r"\s*;\s*|[\r\n]+")
+_PHRASE_EVIDENCE_WEIGHT = 0.25
 _STOPWORDS = frozenset({
-    "a", "an", "and", "at", "color", "for", "from", "imported", "in",
+    "a", "an", "and", "at", "color", "for", "from", "in",
     "is", "it", "matters", "of", "on", "or", "product", "that", "the",
     "this", "to", "what", "with",
 })
@@ -23,12 +25,27 @@ def _state_value(state: object, field: str, default: Any = None) -> Any:
     return state.get(field, default) if isinstance(state, Mapping) else getattr(state, field, default)
 
 
-def _tokens(value: object) -> frozenset[str]:
-    return frozenset(
+def _ordered_tokens(
+    value: object,
+    *,
+    keep_single_character: bool = False,
+) -> tuple[str, ...]:
+    return tuple(
         token.casefold()
         for token in _TOKEN_RE.findall(str(value))
-        if len(token) > 1 and token.casefold() not in _STOPWORDS
+        if (len(token) > 1 or keep_single_character)
+        and token.casefold() not in _STOPWORDS
     )
+
+
+def _tokens(value: object) -> frozenset[str]:
+    return frozenset(_ordered_tokens(value))
+
+
+def _normalized_phrase(value: object) -> str:
+    # One-character terms are noisy as unordered terms, but meaningful inside
+    # ordered phrases such as ``5% spandex``, ``8 inch``, or ``size M``.
+    return " ".join(_ordered_tokens(value, keep_single_character=True))
 
 
 def _flatten(value: object) -> list[str]:
@@ -91,8 +108,12 @@ def _active_fragments(state: object) -> list[tuple[str, float, str]]:
                 continue
             weight = 1.0 if name == AttributeName.CATEGORY.value else base_weight
             for text in _flatten(raw_value):
-                if _tokens(text):
-                    fragments.append((text, weight, name))
+                # One customer reply can contain two independent requirements
+                # separated by a semicolon. Score them as atomic evidence so a
+                # candidate cannot receive full credit for matching only one.
+                for fragment in _FRAGMENT_SEPARATOR_RE.split(text):
+                    if _tokens(fragment):
+                        fragments.append((fragment, weight, name))
     return fragments
 
 
@@ -105,6 +126,26 @@ def _product_text(candidate: Candidate) -> str:
         + [str(item.details)]
         + _flatten(item.description)
         + _flatten(item.store)
+    )
+
+
+def _product_evidence_units(candidate: Candidate) -> frozenset[str]:
+    """Return normalized catalog fields usable as exact evidence tie-breaks."""
+
+    item = candidate.item
+    values: list[object] = [
+        item.title,
+        *item.categories,
+        *item.features,
+        *item.description,
+        item.store,
+    ]
+    for key, value in item.details.items():
+        values.extend((value, f"{key} {value}"))
+    return frozenset(
+        phrase
+        for value in values
+        if (phrase := _normalized_phrase(value))
     )
 
 
@@ -154,7 +195,10 @@ class EvidenceCoverageReranker:
                 for rank, candidate in enumerate(candidates[:top_k], start=1)
             ]
 
-        product_tokens = [_tokens(_product_text(candidate)) for candidate in candidates]
+        product_texts = [_product_text(candidate) for candidate in candidates]
+        product_tokens = [_tokens(text) for text in product_texts]
+        product_phrases = [_normalized_phrase(text) for text in product_texts]
+        product_units = [_product_evidence_units(candidate) for candidate in candidates]
         query_tokens = set().union(*(_tokens(text) for text, _, _ in fragments))
         inverse_frequency = {
             token: math.log(
@@ -163,16 +207,28 @@ class EvidenceCoverageReranker:
             ) + 1.0
             for token in query_tokens
         }
+        fragment_phrases = [
+            _normalized_phrase(text)
+            for text, _, _ in fragments
+        ]
+        phrase_frequency = [
+            sum(phrase in product for product in product_phrases)
+            for phrase in fragment_phrases
+        ]
 
         scored: list[
-            tuple[float, float, float, float, int, Candidate, list[str]]
+            tuple[float, float, float, float, float, int, Candidate, list[str]]
         ] = []
-        for index, (candidate, observed) in enumerate(zip(candidates, product_tokens)):
+        for index, (candidate, observed, product_phrase, evidence_units) in enumerate(
+            zip(candidates, product_tokens, product_phrases, product_units)
+        ):
             weighted_coverage = 0.0
+            phrase_evidence = 0.0
+            exact_unit_evidence = 0.0
             total_weight = 0.0
             complete_matches = 0
             matched_attributes: list[str] = []
-            for text, fragment_weight, attribute in fragments:
+            for fragment_index, (text, fragment_weight, attribute) in enumerate(fragments):
                 requested = _tokens(text)
                 denominator = sum(inverse_frequency[token] for token in requested)
                 if denominator <= 0:
@@ -184,17 +240,38 @@ class EvidenceCoverageReranker:
                 ) / denominator
                 weighted_coverage += fragment_weight * coverage
                 total_weight += fragment_weight
+                normalized = fragment_phrases[fragment_index]
+                if normalized and normalized in product_phrase:
+                    phrase_idf = math.log(
+                        (len(candidates) + 1)
+                        / (1 + phrase_frequency[fragment_index])
+                    ) + 1.0
+                    phrase_evidence += fragment_weight * phrase_idf
+                if normalized and normalized in evidence_units:
+                    # Exact catalog-field equality is only a tie-breaker. This
+                    # keeps robust token/phrase recall primary while preferring
+                    # direct evidence over words scattered across long text.
+                    exact_unit_evidence += fragment_weight
                 if coverage >= 0.999999:
                     complete_matches += 1
                     if attribute not in matched_attributes:
                         matched_attributes.append(attribute)
-            score = weighted_coverage / total_weight if total_weight else 0.0
+            score = (
+                (
+                    weighted_coverage
+                    + _PHRASE_EVIDENCE_WEIGHT * phrase_evidence
+                )
+                / total_weight
+                if total_weight
+                else 0.0
+            )
             popularity = math.log1p(candidate.item.rating_number or 0)
             average_rating = float(candidate.item.average_rating or 0.0)
             retrieval_tiebreak = float(candidate.retrieval_score or 0.0)
             scored.append(
                 (
                     score,
+                    exact_unit_evidence,
                     popularity,
                     average_rating,
                     retrieval_tiebreak,
@@ -204,7 +281,13 @@ class EvidenceCoverageReranker:
                 )
             )
 
-        scored.sort(key=lambda entry: entry[:5], reverse=True)
+        # Rank at the same precision exposed by ``rerank_score``. Sub-machine
+        # floating differences should not bypass the explicit evidence and
+        # stability tie-breakers that follow the primary score.
+        scored.sort(
+            key=lambda entry: (round(entry[0], 6), *entry[1:6]),
+            reverse=True,
+        )
         return [
             RankedCandidate.from_candidate(
                 candidate,
@@ -213,7 +296,7 @@ class EvidenceCoverageReranker:
                 matched=matched,
                 violation=[],
             )
-            for rank, (score, _, _, _, _, candidate, matched) in enumerate(
+            for rank, (score, _, _, _, _, _, candidate, matched) in enumerate(
                 scored[:top_k],
                 start=1,
             )
