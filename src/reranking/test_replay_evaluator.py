@@ -164,8 +164,22 @@ class ReplayEvaluatorIntegrationTest(unittest.TestCase):
             metadata = report["experiments"]["s1_rule_fuzzy"]["metadata"]
             self.assertIn("hard_constraint_strategy", metadata)
             self.assertIn("score_fusion", metadata)
+            summary = report["experiments"]["s1_rule_fuzzy"]["summary"]
+            self.assertEqual(
+                set(summary["scenario_case_metrics"]),
+                {"buying", "intent_override"},
+            )
+            buying_case = summary["scenario_case_metrics"]["buying"]
+            self.assertIn("conditional_hit_at_10", buying_case["case_metrics"])
+            self.assertIn("p95", buying_case["latency_ms"])
+            buying_session = summary["session_metrics"]["scenario_metrics"]["buying"]
+            self.assertIn("efficiency", buying_session)
+            self.assertIn("replay_technical_score", buying_session)
             self.assertTrue((result_directory / "report.md").is_file())
             self.assertTrue((result_directory / "case_results.jsonl.gz").is_file())
+            report_markdown = (result_directory / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## Scenario case metrics: s1_rule_fuzzy", report_markdown)
+            self.assertIn("## Scenario session metrics: s1_rule_fuzzy", report_markdown)
 
     def test_one_experiment_id_cannot_mix_configurations(self) -> None:
         with self.assertRaisesRegex(ValueError, "exactly one"):

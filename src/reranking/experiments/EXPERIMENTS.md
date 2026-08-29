@@ -20,6 +20,63 @@ artifacts/reranking_replay/<replay-data-version>/results/<experiment-id>/
 | `RR-001` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `7731c15` | Buying=H2 Feasibility Tier；Browsing=H1 Soft Penalty | S1 local Rule/Fuzzy | 结构化 hard/soft，均为空时使用当前消息 / Item 属性与限长 observations | F1 intent-aware 手工线性融合 | D1 无多样性；Profile lexical | **0.791126 / 0.585244** | **171 / 14** | **0.147763** | **0.716910** | 378.363 / 1396.241 ms | 00:17:04（包含同次 RR-000 control） | `results/RR-001/`；整体提升，下一步检查 Intent Override 回退与延迟 |
 | `RR-002` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `c319c18` | 旧版任一 violation 二元惩罚；无 H1/H2 | 初版 exact token overlap；无 fuzzy/model | 直接读取当前结构化 State / 属性字段 + title/categories/features/description | 初版 intent-aware 线性权重（`799e8c1`） | Diversity=无；Profile exact token | 0.703754 / 0.512632 | 30 / 1 | 0.323881 | 0.636383 | 39.710 / 68.472 ms | **97.346 s** | `results/RR-002/`；仅略优于 Retrieval，明显弱于 RR-001，且 hard violation 略升 |
 
+## 四类场景对照
+
+以下数值由同一版 `public200-git0ad81a1` Replay 的已保存
+`case_results.jsonl.gz` 重新汇总，不重新执行 Reranker。`RR-000` 是 Retrieval
+control，`RR-002` 是最初版 SimpleReranker，`RR-001` 是当前 S1 Rule/Fuzzy。
+
+### Session 级结果
+
+| 场景 | 编号 | Sessions | HitRate@10 | MRR | MTTC ↓ | Efficiency | Replay Score |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Browsing | `RR-000` | 80 | 0.875000 | 0.535432 | 4.187500 | 0.681250 | 0.734379 |
+| Browsing | `RR-002` | 80 | 0.875000 | 0.512336 | 3.887500 | 0.711250 | 0.733451 |
+| Browsing | `RR-001` | 80 | **0.975000** | **0.606334** | 3.162500 | **0.783750** | **0.826150** |
+| Buying | `RR-000` | 80 | 0.762500 | 0.454683 | 6.575000 | 0.442500 | 0.606155 |
+| Buying | `RR-002` | 80 | 0.775000 | 0.463537 | 6.512500 | 0.448750 | 0.616311 |
+| Buying | `RR-001` | 80 | **0.900000** | **0.555179** | **5.562500** | **0.543750** | **0.725304** |
+| Boundary | `RR-000` | 10 | 0.800000 | 0.575000 | 6.300000 | 0.470000 | 0.666500 |
+| Boundary | `RR-002` | 10 | 0.800000 | 0.578571 | 6.300000 | 0.470000 | 0.667571 |
+| Boundary | `RR-001` | 10 | **0.900000** | **0.595238** | **6.100000** | **0.490000** | **0.726571** |
+| Intent Override | `RR-000` | 30 | **0.500000** | 0.427778 | **9.133333** | **0.186667** | 0.415667 |
+| Intent Override | `RR-002` | 30 | **0.500000** | **0.444444** | **9.133333** | **0.186667** | **0.420667** |
+| Intent Override | `RR-001` | 30 | 0.466667 | 0.433333 | 9.166667 | 0.183333 | 0.400000 |
+
+### Case 级诊断
+
+| 场景 | 编号 | Scorable cases | Coverage@100 | Cond. Hit / MRR@10 | Promotion / Demotion | Mean rank Δ | Hard violation@10 | P95 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Browsing | `RR-000` | 800 | 0.888750 | 0.766526 / 0.569721 | 0 / 0 | 0.000000 | 0.246750 | 0.241 ms |
+| Browsing | `RR-002` | 800 | 0.888750 | 0.800281 / 0.585006 | 25 / 1 | 0.511955 | 0.251000 | 70.159 ms |
+| Browsing | `RR-001` | 800 | 0.888750 | **0.881857 / 0.668409** | **83 / 1** | **3.436006** | **0.036500** | 1512.236 ms |
+| Buying | `RR-000` | 800 | 0.775000 | 0.570968 / 0.396829 | 0 / 0 | 0.000000 | 0.213000 | 0.240 ms |
+| Buying | `RR-002` | 800 | 0.775000 | 0.579032 / 0.390700 | 5 / 0 | 1.877419 | 0.220750 | 68.178 ms |
+| Buying | `RR-001` | 800 | 0.775000 | **0.690323 / 0.466207** | **86 / 12** | **7.241935** | **0.039750** | 1333.215 ms |
+| Boundary | `RR-000` | 100 | 0.700000 | 0.671429 / 0.548214 | 0 / 0 | 0.000000 | 0.221000 | 0.258 ms |
+| Boundary | `RR-002` | 100 | 0.700000 | 0.671429 / 0.550000 | 0 / 0 | 2.114286 | 0.231000 | 59.712 ms |
+| Boundary | `RR-001` | 100 | 0.700000 | **0.700000 / 0.558503** | **2 / 0** | **2.528571** | **0.010000** | 1043.974 ms |
+| Intent Override | `RR-000` | 222 | 0.288288 | **0.875000 / 0.825521** | 0 / 0 | 0.000000 | 1.000000 | 0.238 ms |
+| Intent Override | `RR-002` | 222 | 0.288288 | **0.875000 / 0.848958** | 0 / 0 | 0.140625 | 1.000000 | 57.581 ms |
+| Intent Override | `RR-001` | 222 | 0.288288 | 0.859375 / 0.843750 | 0 / 1 | -1.484375 | 1.000000 | 1129.079 ms |
+
+### 参数调整指引
+
+- **Browsing**：`RR-001` 的 HitRate、MRR、promotion 和 hard-constraint 质量均明显
+  提升，说明 H1 Soft Penalty + S1 方向有效。下一轮可优先压低 fuzzy 计算成本，
+  再小范围调整 semantic/retrieval/profile 权重，避免破坏现有提升。
+- **Buying**：`RR-001` 提升最大，H2 Feasibility Tier 有效；但出现 12 次 demotion。
+  下一轮应把这 12 个 case 单独检查，区分“正确执行 hard constraint”与“错误匹配/UNKNOWN
+  分层”，再调 hard tier、unknown penalty 和层内 relevance 权重。
+- **Boundary**：当前仅有 10 个 session，方向看起来改善但方差很大。参数选择不能主要
+  依赖该场景；应重点检查空约束、`no_prefernce` 和缺失属性时是否保持 Retrieval 稳定。
+- **Intent Override**：`RR-001` 比 control 和初版都回退，且三种方法的 Top 10 hard
+  violation item rate 都是 1.0。应先修复/确认上游 State 对旧约束的清除，再调整
+  Reranker；否则 H2 可能在更严格地执行已经过期的 hard constraint。
+- **Coverage@100** 是冻结的 Retrieval 输入，同一场景下三个 Reranker 完全相同，不能
+  通过调 Reranking 参数提升。Intent Override 的 0.288288 首先指向 Retrieval/State，
+  不是 Top 10 排序本身。
+
 ## 字段填写规则
 
 - **Replay 数据版本**：填写录制目录名，而不是只写“public set”。目录中的

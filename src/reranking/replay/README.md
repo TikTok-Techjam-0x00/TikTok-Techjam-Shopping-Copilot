@@ -65,13 +65,19 @@ result version under `<dataset-run>/results/<experiment-id>/`:
 - `report.json`: complete aggregate metrics, human-readable configuration,
   total test duration, and both the dataset-generation and evaluation Git
   versions.
-- `report.md`: compact comparison table.
+- `report.md`: overall comparison plus separate case-level and session-level
+  tables for `browsing`, `buying`, `boundary`, and `intent_override`.
 - `case_results.jsonl.gz`: ranks, promotions, demotions, constraint quality, and
   latency for every case and experiment.
 
 Metrics include `coverage@100`, conditional Hit@10/MRR@10, promotions,
 demotions, mean exact rank change, hard-constraint violation/unknown rates,
 P50/P95 latency, and replay estimates of Hit Rate, MRR, MTTC, and TechnicalScore.
+The same metrics are also grouped by `scenario_type`. Case metrics show what the
+Reranker changed on individual turns; session metrics show whether and how soon
+the target entered Top 10 across the complete dialogue. Each scenario receives
+its own efficiency and Replay TechnicalScore, using the same formula as the
+overall score.
 
 The replay estimate is a reranking-only diagnostic. A selected configuration
 must still be verified with `python -m evaluator.local_evaluator`.

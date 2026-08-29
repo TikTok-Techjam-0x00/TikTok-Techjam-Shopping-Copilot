@@ -109,6 +109,7 @@ def builtin_experiment_metadata() -> dict[str, dict[str, str]]:
 
 
 EXPERIMENT_ID_RE = re.compile(r"RR-\d{3,}")
+SCENARIO_ORDER = ("browsing", "buying", "boundary", "intent_override")
 
 
 def _safe_experiment_id(value: str) -> str:
@@ -335,42 +336,53 @@ def _session_metrics(case_results: Sequence[Mapping[str, Any]], max_turns: int) 
 
     def summarize(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if not rows:
-            return {"sample_count": 0, "hit_rate_at_10": 0.0, "mrr": 0.0, "mttc": None}
+            return {
+                "sample_count": 0,
+                "hit_rate_at_10": 0.0,
+                "mrr": 0.0,
+                "mttc": None,
+                "efficiency": 0.0,
+                "replay_technical_score": 0.0,
+            }
         hit_rate = sum(bool(row["hit"]) for row in rows) / len(rows)
         mrr = statistics.fmean(float(row["reciprocal_rank"]) for row in rows)
         mttc = statistics.fmean(
             int(row["first_hit_turn"]) if row["first_hit_turn"] is not None else max_turns + 1
             for row in rows
         )
+        efficiency = max(0.0, min(1.0, (max_turns + 1.0 - mttc) / max_turns))
+        technical_score = 0.50 * hit_rate + 0.30 * mrr + 0.20 * efficiency
         return {
             "sample_count": len(rows),
             "hit_rate_at_10": round(hit_rate, 6),
             "mrr": round(mrr, 6),
             "mttc": round(mttc, 6),
+            "efficiency": round(efficiency, 6),
+            "replay_technical_score": round(technical_score, 6),
         }
 
     overall = summarize(sessions)
-    efficiency = max(0.0, min(1.0, (max_turns + 1.0 - float(overall["mttc"] or max_turns + 1)) / max_turns))
-    technical_score = 0.50 * overall["hit_rate_at_10"] + 0.30 * overall["mrr"] + 0.20 * efficiency
     scenario_groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for session in sessions:
         scenario_groups[str(session["scenario_type"])].append(session)
     return {
         **overall,
-        "efficiency": round(efficiency, 6),
-        "replay_technical_score": round(technical_score, 6),
         "scenario_metrics": {
-            scenario: summarize(rows) for scenario, rows in sorted(scenario_groups.items())
+            scenario: summarize(scenario_groups[scenario])
+            for scenario in _ordered_scenarios(scenario_groups)
         },
         "sessions": sessions,
     }
 
 
-def summarize_experiment(
-    case_results: Sequence[Mapping[str, Any]],
-    *,
-    max_turns: int,
-) -> dict[str, Any]:
+def _ordered_scenarios(groups: Mapping[str, Any]) -> list[str]:
+    """Keep the four official scenarios stable, followed by any future scenarios."""
+
+    known = [scenario for scenario in SCENARIO_ORDER if scenario in groups]
+    return [*known, *sorted(set(groups) - set(SCENARIO_ORDER))]
+
+
+def _summarize_cases(case_results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     scorable = [row for row in case_results if row["scorable"]]
     eligible = [row for row in scorable if row["retrieval_covered"]]
     changes = [float(row["rank_change"]) for row in eligible if row["rank_change"] is not None]
@@ -408,6 +420,24 @@ def summarize_experiment(
             "p50": round(_percentile(latencies, 0.50), 3),
             "p95": round(_percentile(latencies, 0.95), 3),
             "max": round(max(latencies), 3) if latencies else 0.0,
+        },
+    }
+
+
+def summarize_experiment(
+    case_results: Sequence[Mapping[str, Any]],
+    *,
+    max_turns: int,
+) -> dict[str, Any]:
+    overall = _summarize_cases(case_results)
+    scenario_groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in case_results:
+        scenario_groups[str(row["scenario_type"])].append(row)
+    return {
+        **overall,
+        "scenario_case_metrics": {
+            scenario: _summarize_cases(scenario_groups[scenario])
+            for scenario in _ordered_scenarios(scenario_groups)
         },
         "session_metrics": _session_metrics(case_results, max_turns),
     }
@@ -457,6 +487,45 @@ def _markdown_report(report: Mapping[str, Any]) -> str:
             f"{case['hard_violation_item_rate_at_10']:.6f} | {latency['p95']:.3f} | "
             f"{session['replay_technical_score']:.6f} | {result['elapsed_seconds']:.3f} |"
         )
+    for name, result in report["experiments"].items():
+        summary = result["summary"]
+        lines.extend(
+            [
+                "",
+                f"## Scenario case metrics: {name}",
+                "",
+                "| Scenario | Cases | Coverage@100 | Cond. Hit@10 | Cond. MRR@10 | Promotions | Demotions | Mean rank Δ | Hard violation@10 | Hard unknown | P95 ms |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for scenario, scenario_summary in summary["scenario_case_metrics"].items():
+            case = scenario_summary["case_metrics"]
+            latency = scenario_summary["latency_ms"]
+            rank_change = case["mean_rank_change"]
+            lines.append(
+                f"| {scenario} | {case['scorable_case_count']} | {case['coverage_at_100']:.6f} | "
+                f"{case['conditional_hit_at_10']:.6f} | {case['conditional_mrr_at_10']:.6f} | "
+                f"{case['promotion_count']} | {case['demotion_count']} | "
+                f"{rank_change if rank_change is not None else '—'} | "
+                f"{case['hard_violation_item_rate_at_10']:.6f} | "
+                f"{case['hard_unknown_rate']:.6f} | {latency['p95']:.3f} |"
+            )
+        lines.extend(
+            [
+                "",
+                f"## Scenario session metrics: {name}",
+                "",
+                "| Scenario | Sessions | HitRate@10 | MRR | MTTC | Efficiency | Replay score |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for scenario, session in summary["session_metrics"]["scenario_metrics"].items():
+            mttc = session["mttc"]
+            lines.append(
+                f"| {scenario} | {session['sample_count']} | {session['hit_rate_at_10']:.6f} | "
+                f"{session['mrr']:.6f} | {mttc if mttc is not None else '—'} | "
+                f"{session['efficiency']:.6f} | {session['replay_technical_score']:.6f} |"
+            )
     lines.extend(
         [
             "",
