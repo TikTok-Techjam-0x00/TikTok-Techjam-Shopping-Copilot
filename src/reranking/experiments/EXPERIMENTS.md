@@ -18,6 +18,7 @@ artifacts/reranking_replay/<replay-data-version>/results/<experiment-id>/
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `RR-000` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `d1fceef` | 无；保持 Retrieval 顺序 | 无 | 无 / 无 | 无 | Diversity=无；Profile=无 | 0.683959 / 0.506699 | 0 / 0 | 0.318366 | 0.631889 | 0.156 / 0.241 ms | **16.001 s** | `results/RR-000/`；Retrieval control |
 | `RR-001` | 完成 / 2026-08-29 | `public200-git0ad81a1` | `0ad81a1` / `7731c15` | Buying=H2 Feasibility Tier；Browsing=H1 Soft Penalty | S1 local Rule/Fuzzy | 结构化 hard/soft，均为空时使用当前消息 / Item 属性与限长 observations | F1 intent-aware 手工线性融合 | D1 无多样性；Profile lexical | **0.791126 / 0.585244** | **171 / 14** | **0.147763** | **0.716910** | 378.363 / 1396.241 ms | 00:17:04（包含同次 RR-000 control） | `results/RR-001/`；整体提升，下一步检查 Intent Override 回退与延迟 |
+| `RR-002` | 待运行 | `public200-git0ad81a1` | `0ad81a1` / 待提交 | 旧版任一 violation 二元惩罚；无 H1/H2 | 初版 exact token overlap；无 fuzzy/model | 直接读取当前结构化 State / 属性字段 + title/categories/features/description | 初版 intent-aware 线性权重（`799e8c1`） | Diversity=无；Profile exact token | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 | `results/RR-002/`；初版 SimpleReranker 兼容性回放 |
 
 ## 字段填写规则
 

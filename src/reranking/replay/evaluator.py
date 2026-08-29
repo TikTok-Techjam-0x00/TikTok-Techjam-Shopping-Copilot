@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.item import Candidate, RankedCandidate
 from src.retrieval import Catalog
 from src.reranking import ConstraintMatcher, MatchStatus, SimpleReranker
+from src.reranking.experiments import InitialSimpleReranker
 from src.reranking.replay.provenance import collect_provenance, sha256_file
 from src.reranking.replay.schema import SCHEMA_VERSION, ReplayCase, ReplayLabel
 
@@ -67,6 +68,7 @@ class RetrievalOrderRanker:
 
 def builtin_experiments() -> dict[str, FullRankingProtocol]:
     return {
+        "initial_simple_reranker": InitialSimpleReranker(),
         "retrieval_order": RetrievalOrderRanker(),
         "s1_rule_fuzzy": SimpleReranker(),
     }
@@ -76,6 +78,15 @@ def builtin_experiment_metadata() -> dict[str, dict[str, str]]:
     """Human-readable configuration fields mirrored by the experiment registry."""
 
     return {
+        "initial_simple_reranker": {
+            "hard_constraint_strategy": "Legacy binary any-violation penalty; no H1/H2",
+            "semantic_relevance_model": "Legacy exact token-overlap ratio; no fuzzy/model",
+            "query_text_serialization": "Direct current structured State; no standalone serializer",
+            "product_text_serialization": "Attribute field plus title/categories/features/description common text",
+            "score_fusion": "Legacy intent-aware linear weights from git 799e8c1",
+            "diversity_strategy": "None",
+            "user_profile_signal": "preference_tags exact token match",
+        },
         "retrieval_order": {
             "hard_constraint_strategy": "None (Retrieval order control)",
             "semantic_relevance_model": "None",
@@ -122,6 +133,10 @@ def _json_safe(value: Any) -> Any:
 
 def _experiment_config(ranker: FullRankingProtocol) -> dict[str, Any]:
     result: dict[str, Any] = {"class": f"{type(ranker).__module__}.{type(ranker).__qualname__}"}
+    for provenance_field in ("historical_source_commit", "composition_adapter_commit"):
+        provenance_value = getattr(ranker, provenance_field, None)
+        if provenance_value is not None:
+            result[provenance_field] = str(provenance_value)
     for name in ("strategy_config", "constraint_matcher", "feature_extractor", "relevance_scorer"):
         value = getattr(ranker, name, None)
         if value is None:
