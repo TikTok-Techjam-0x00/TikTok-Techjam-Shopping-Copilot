@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import dataclasses
 import unittest
 
 from src.attribute import AttributeName, normalize_attribute_map
 from src.item import Item
-from src.reranking.scorers import RuleFuzzyScorer, RuleFuzzyScorerConfig
+from src.reranking.scorers import (
+    FastRuleFuzzyScorer,
+    RuleFuzzyScorer,
+    RuleFuzzyScorerConfig,
+)
 
 
 class RuleFuzzyScorerTest(unittest.TestCase):
@@ -135,6 +140,53 @@ class RuleFuzzyScorerTest(unittest.TestCase):
     def test_configuration_is_validated(self) -> None:
         with self.assertRaises(ValueError):
             RuleFuzzyScorerConfig(phrase_weight=0.9)
+
+    def test_s1_fast_is_diagnostic_and_score_equivalent(self) -> None:
+        baseline = RuleFuzzyScorer()
+        fast = FastRuleFuzzyScorer(product_cache_size=2, text_cache_size=128)
+        hard = normalize_attribute_map(
+            {"category": "running shoes", "material": "mesh", "budget": {"max": 100}}
+        )
+        soft = normalize_attribute_map(
+            {"feature": ["lightwieght", "water resistant"], "color": "black"}
+        )
+        for product in (self.relevant, self.unrelated):
+            expected = baseline.score(
+                product,
+                hard_constraints=hard,
+                soft_constraints=soft,
+                query_text="ignored when structured state exists",
+            )
+            actual = fast.score(
+                product,
+                hard_constraints=hard,
+                soft_constraints=soft,
+                query_text="ignored when structured state exists",
+            )
+            self.assertEqual(dataclasses.asdict(actual), dataclasses.asdict(expected))
+
+        # A second pass must exercise both bounded caches without changing output.
+        repeated = fast.score(
+            self.relevant,
+            hard_constraints=hard,
+            soft_constraints=soft,
+        )
+        expected_repeated = baseline.score(
+            self.relevant,
+            hard_constraints=hard,
+            soft_constraints=soft,
+        )
+        self.assertEqual(
+            dataclasses.asdict(repeated),
+            dataclasses.asdict(expected_repeated),
+        )
+        cache = fast.cache_info()
+        self.assertEqual(cache["product_entries"], 2)
+        self.assertGreater(cache["text"]["hits"], 0)
+
+    def test_s1_fast_cache_sizes_are_validated(self) -> None:
+        with self.assertRaises(ValueError):
+            FastRuleFuzzyScorer(product_cache_size=0)
 
 
 if __name__ == "__main__":

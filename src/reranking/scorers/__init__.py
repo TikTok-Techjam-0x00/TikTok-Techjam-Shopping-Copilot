@@ -2,6 +2,7 @@
 
 from .base import RelevanceScore, RelevanceScorer
 from .rule_scorer import (
+    FastRuleFuzzyScorer,
     RuleFuzzyScorer,
     RuleFuzzyScorerConfig,
     score_rule_relevance,
@@ -10,6 +11,7 @@ from .rule_scorer import (
 __all__ = [
     "RelevanceScore",
     "RelevanceScorer",
+    "FastRuleFuzzyScorer",
     "RuleFuzzyScorerConfig",
     "RuleFuzzyScorer",
     "score_rule_relevance",

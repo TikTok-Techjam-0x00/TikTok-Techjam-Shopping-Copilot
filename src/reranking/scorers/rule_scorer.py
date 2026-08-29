@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 import re
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
+from typing import Callable, NamedTuple
 
 from ...attribute import (
     AttributeName,
@@ -64,6 +66,22 @@ class _TextScore:
     token: float
     fuzzy: float
     observed: str
+
+
+class _PreparedText(NamedTuple):
+    """Immutable text view cached only by the S1-fast experiment."""
+
+    normalized: str
+    tokens: frozenset[str]
+
+
+@dataclass(slots=True)
+class _CachedProductText:
+    """Original product strings plus lazily prepared attribute observations."""
+
+    product: Item
+    full_product_text: tuple[str, ...]
+    observations: dict[AttributeName, tuple[str, ...]]
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -140,38 +158,46 @@ def _token_key(token: str) -> str:
     return token
 
 
-def _tokens_from_normalized(value: str) -> set[str]:
-    return {_token_key(token) for token in _TOKEN_RE.findall(value)}
+def _tokens_from_normalized(value: str) -> frozenset[str]:
+    return frozenset(_token_key(token) for token in _TOKEN_RE.findall(value))
+
+
+def _prepare_text(value: str) -> _PreparedText:
+    normalized = _normalize_text(value)
+    return _PreparedText(normalized, _tokens_from_normalized(normalized))
 
 
 def _text_score(
     requested: str,
     observed_values: Sequence[str],
     config: RuleFuzzyScorerConfig,
+    prepare_text: Callable[[str], _PreparedText] = _prepare_text,
 ) -> _TextScore:
-    requested_text = _normalize_text(requested)
+    requested_prepared = prepare_text(str(requested))
+    requested_text = requested_prepared.normalized
     if not requested_text:
         return _TextScore(0.0, 0.0, 0.0, 0.0, "")
 
     best = _TextScore(0.0, 0.0, 0.0, 0.0, "")
-    requested_tokens = _tokens_from_normalized(requested_text)
+    requested_tokens = requested_prepared.tokens
+    phrase_pattern = re.compile(
+        rf"(?<![a-z0-9]){re.escape(requested_text)}(?![a-z0-9])"
+    )
     comparison_values = list(observed_values[: config.max_observations])
     combined_observed = " ".join(observed_values)
     if combined_observed:
         comparison_values.append(combined_observed)
 
     for observed in comparison_values:
-        observed_text = _normalize_text(observed)
+        observed_prepared = prepare_text(str(observed))
+        observed_text = observed_prepared.normalized
         if not observed_text:
             continue
         phrase_match = requested_text == observed_text or bool(
-            re.search(
-                rf"(?<![a-z0-9]){re.escape(requested_text)}(?![a-z0-9])",
-                observed_text,
-            )
+            phrase_pattern.search(observed_text)
         )
         phrase = float(phrase_match)
-        observed_tokens = _tokens_from_normalized(observed_text)
+        observed_tokens = observed_prepared.tokens
         token = (
             len(requested_tokens & observed_tokens) / len(requested_tokens)
             if requested_tokens
@@ -295,6 +321,32 @@ class RuleFuzzyScorer:
     def __init__(self, config: RuleFuzzyScorerConfig | None = None) -> None:
         self.config = config or RuleFuzzyScorerConfig()
 
+    def _prepare_text(self, value: str) -> _PreparedText:
+        return _prepare_text(value)
+
+    def _full_product_text(self, product: Item) -> Sequence[str]:
+        return _product_text(product)
+
+    def _observations(
+        self,
+        product: Item,
+        attribute: AttributeName,
+        full_product_text: Sequence[str],
+    ) -> Sequence[str]:
+        return _attribute_observations(product, attribute, full_product_text)
+
+    def _score_text(
+        self,
+        requested: str,
+        observed_values: Sequence[str],
+    ) -> _TextScore:
+        return _text_score(
+            requested,
+            observed_values,
+            self.config,
+            self._prepare_text,
+        )
+
     def score(
         self,
         product: Item,
@@ -310,8 +362,8 @@ class RuleFuzzyScorer:
         requested_texts: list[str] = []
         matched_terms: list[str] = []
         evidence: list[str] = []
-        full_product_text = _product_text(product)
-        observation_cache: dict[AttributeName, list[str]] = {}
+        full_product_text = self._full_product_text(product)
+        observation_cache: dict[AttributeName, Sequence[str]] = {}
 
         groups = (
             (hard_constraints, self.config.hard_constraint_weight, "hard"),
@@ -332,7 +384,7 @@ class RuleFuzzyScorer:
                     continue
 
                 if attribute not in observation_cache:
-                    observation_cache[attribute] = _attribute_observations(
+                    observation_cache[attribute] = self._observations(
                         product,
                         attribute,
                         full_product_text,
@@ -340,7 +392,7 @@ class RuleFuzzyScorer:
                 observations = observation_cache[attribute]
                 for requested in _constraint_text_values(value):
                     requested_texts.append(requested)
-                    result = _text_score(requested, observations, self.config)
+                    result = self._score_text(requested, observations)
                     weighted_scores.append((result.combined, weight))
                     component_scores.append((result, weight))
                     per_attribute[attribute].append((result.combined, weight))
@@ -354,7 +406,7 @@ class RuleFuzzyScorer:
         # Current-message fallback is intentionally used only when State has no
         # structured positive requirement, preventing stale history leakage.
         if not weighted_scores and query_text.strip():
-            result = _text_score(query_text, _product_text(product), self.config)
+            result = self._score_text(query_text, full_product_text)
             weighted_scores.append((result.combined, 1.0))
             component_scores.append((result, 1.0))
             requested_texts.append(query_text)
@@ -373,10 +425,9 @@ class RuleFuzzyScorer:
 
         global_score = 0.0
         if requested_texts:
-            global_result = _text_score(
+            global_result = self._score_text(
                 " ".join(requested_texts),
                 full_product_text,
-                self.config,
             )
             global_score = global_result.combined
         overall = structured_score
@@ -430,6 +481,102 @@ class RuleFuzzyScorer:
         )
 
 
+class FastRuleFuzzyScorer(RuleFuzzyScorer):
+    """S1-fast: memoize product-side preparation without changing score math.
+
+    Catalog ``Item`` instances are treated as immutable during one scorer's
+    lifetime, which is already the Retrieval/Reranking runtime contract. The
+    bounded caches prevent long-lived agents from retaining the full catalog.
+    """
+
+    def __init__(
+        self,
+        config: RuleFuzzyScorerConfig | None = None,
+        *,
+        product_cache_size: int = 8192,
+        text_cache_size: int = 131072,
+        score_cache_size: int = 131072,
+    ) -> None:
+        super().__init__(config)
+        if product_cache_size < 1 or text_cache_size < 1 or score_cache_size < 1:
+            raise ValueError("S1-fast cache sizes must be positive")
+        self.product_cache_size = product_cache_size
+        self.text_cache_size = text_cache_size
+        self.score_cache_size = score_cache_size
+        self._product_cache: OrderedDict[int, _CachedProductText] = OrderedDict()
+        self._cached_prepare_text = lru_cache(maxsize=text_cache_size)(_prepare_text)
+        self._cached_score_text = lru_cache(maxsize=score_cache_size)(
+            self._score_text_uncached
+        )
+
+    def _prepare_text(self, value: str) -> _PreparedText:
+        return self._cached_prepare_text(str(value))
+
+    def _score_text_uncached(
+        self,
+        requested: str,
+        observed_values: tuple[str, ...],
+    ) -> _TextScore:
+        return _text_score(
+            requested,
+            observed_values,
+            self.config,
+            self._prepare_text,
+        )
+
+    def _score_text(
+        self,
+        requested: str,
+        observed_values: Sequence[str],
+    ) -> _TextScore:
+        return self._cached_score_text(str(requested), tuple(observed_values))
+
+    def _cached_product(self, product: Item) -> _CachedProductText:
+        key = id(product)
+        cached = self._product_cache.get(key)
+        if cached is not None and cached.product is product:
+            self._product_cache.move_to_end(key)
+            return cached
+        prepared = _CachedProductText(
+            product=product,
+            full_product_text=tuple(_product_text(product)),
+            observations={},
+        )
+        self._product_cache[key] = prepared
+        self._product_cache.move_to_end(key)
+        while len(self._product_cache) > self.product_cache_size:
+            self._product_cache.popitem(last=False)
+        return prepared
+
+    def _full_product_text(self, product: Item) -> Sequence[str]:
+        return self._cached_product(product).full_product_text
+
+    def _observations(
+        self,
+        product: Item,
+        attribute: AttributeName,
+        full_product_text: Sequence[str],
+    ) -> Sequence[str]:
+        cached = self._cached_product(product)
+        observations = cached.observations.get(attribute)
+        if observations is None:
+            observations = tuple(
+                _attribute_observations(product, attribute, full_product_text)
+            )
+            cached.observations[attribute] = observations
+        return observations
+
+    def cache_info(self) -> dict[str, object]:
+        """Expose cache diagnostics for tests and experiment reports."""
+
+        return {
+            "product_entries": len(self._product_cache),
+            "product_maxsize": self.product_cache_size,
+            "text": self._cached_prepare_text.cache_info()._asdict(),
+            "score": self._cached_score_text.cache_info()._asdict(),
+        }
+
+
 _DEFAULT_SCORER = RuleFuzzyScorer()
 
 
@@ -452,5 +599,6 @@ def score_rule_relevance(
 __all__ = [
     "RuleFuzzyScorerConfig",
     "RuleFuzzyScorer",
+    "FastRuleFuzzyScorer",
     "score_rule_relevance",
 ]

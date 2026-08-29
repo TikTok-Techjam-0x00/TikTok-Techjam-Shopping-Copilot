@@ -81,3 +81,20 @@ overall score.
 
 The replay estimate is a reranking-only diagnostic. A selected configuration
 must still be verified with `python -m evaluator.local_evaluator`.
+
+## 3. Verify an equivalent optimization
+
+S1-fast caches immutable Catalog product text, normalized tokens, and repeated
+fuzzy comparisons. It does not change the S1 formula or fusion weights. Before
+accepting a performance-only experiment, compare every observable rank output:
+
+```powershell
+python -m src.reranking.replay.equivalence `
+  artifacts/reranking_replay/<dataset-run> `
+  --output artifacts/reranking_replay/<dataset-run>/equivalence/RR-005.json
+```
+
+The checker compares all ranks, `parent_asin`, rounded rerank scores, matched
+attributes, and violations between uncached S1 and S1-fast. It fails on the
+first difference and records cache sizes, hit/miss counts, timings, input
+checksums, and Git provenance when the comparison succeeds.

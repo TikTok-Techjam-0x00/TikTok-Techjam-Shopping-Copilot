@@ -25,7 +25,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.item import Candidate, RankedCandidate
 from src.retrieval import Catalog
-from src.reranking import ConstraintMatcher, MatchStatus, SimpleReranker
+from src.reranking import (
+    ConstraintMatcher,
+    FastRuleFuzzyScorer,
+    MatchStatus,
+    RuleFuzzyScorer,
+    SimpleReranker,
+)
 from src.reranking.experiments import InitialSimpleReranker
 from src.reranking.replay.provenance import collect_provenance, sha256_file
 from src.reranking.replay.schema import SCHEMA_VERSION, ReplayCase, ReplayLabel
@@ -70,7 +76,12 @@ def builtin_experiments() -> dict[str, FullRankingProtocol]:
     return {
         "initial_simple_reranker": InitialSimpleReranker(),
         "retrieval_order": RetrievalOrderRanker(),
-        "s1_rule_fuzzy": SimpleReranker(),
+        "s1_fast_equivalent": SimpleReranker(
+            relevance_scorer=FastRuleFuzzyScorer(),
+        ),
+        "s1_rule_fuzzy": SimpleReranker(
+            relevance_scorer=RuleFuzzyScorer(),
+        ),
     }
 
 
@@ -102,6 +113,15 @@ def builtin_experiment_metadata() -> dict[str, dict[str, str]]:
             "query_text_serialization": "Structured hard/soft constraints; current user message only when both are empty",
             "product_text_serialization": "Direct Item attributes plus capped title/category/features/details observations",
             "score_fusion": "F1 intent-aware hand-tuned linear fusion",
+            "diversity_strategy": "D1 None",
+            "user_profile_signal": "preference_tags lexical match",
+        },
+        "s1_fast_equivalent": {
+            "hard_constraint_strategy": "Buying=H2 Feasibility Tier; Browsing=H1 Soft Penalty",
+            "semantic_relevance_model": "S1-fast RuleFuzzyScorer; score-equivalent bounded caches",
+            "query_text_serialization": "Structured hard/soft constraints; current user message only when both are empty",
+            "product_text_serialization": "Cached normalized Item attributes plus capped title/category/features/details observations",
+            "score_fusion": "F1 intent-aware hand-tuned linear fusion; identical to RR-004",
             "diversity_strategy": "D1 None",
             "user_profile_signal": "preference_tags lexical match",
         },
@@ -150,6 +170,17 @@ def _experiment_config(ranker: FullRankingProtocol) -> dict[str, Any]:
                 config = getattr(value, config_name, None)
                 if config is not None:
                     nested[config_name] = _json_safe(config)
+            cache_sizes = {
+                field: getattr(value, field)
+                for field in (
+                    "product_cache_size",
+                    "text_cache_size",
+                    "score_cache_size",
+                )
+                if getattr(value, field, None) is not None
+            }
+            if cache_sizes:
+                nested["cache_sizes"] = cache_sizes
             result[name] = nested
         else:
             result[name] = _json_safe(value)

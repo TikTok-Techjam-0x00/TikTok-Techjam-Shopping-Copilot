@@ -12,6 +12,7 @@ from src.reranking.replay.evaluator import (
     evaluate_replay,
     load_replay_dataset,
 )
+from src.reranking.replay.equivalence import verify_s1_fast_equivalence
 from src.reranking.replay.recorder import collect_replay_dataset
 
 
@@ -138,6 +139,14 @@ class ReplayEvaluatorIntegrationTest(unittest.TestCase):
                 manifest["generation_provenance"]["component_versions"]["state"],
             )
             self.assertEqual(len(cases), len(labels))
+
+            equivalence = verify_s1_fast_equivalence(
+                replay_directory,
+                catalog_path=catalog_path,
+            )
+            self.assertTrue(equivalence["equivalent"])
+            self.assertEqual(equivalence["compared_cases"], 6)
+            self.assertGreater(equivalence["compared_candidates"], 0)
 
             override_cases = [
                 case for case in cases if case.sample_id == "public_test_override"

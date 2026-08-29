@@ -28,6 +28,7 @@ from .feature_extractor import (
     extract_candidate_features,
 )
 from .scorers import (
+    FastRuleFuzzyScorer,
     RelevanceScore,
     RelevanceScorer,
     RuleFuzzyScorer,
@@ -66,6 +67,7 @@ __all__ = [
     "extract_candidate_features",
     "RelevanceScore",
     "RelevanceScorer",
+    "FastRuleFuzzyScorer",
     "RuleFuzzyScorerConfig",
     "RuleFuzzyScorer",
     "score_rule_relevance",

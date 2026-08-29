@@ -29,7 +29,7 @@ from .constraint_matcher import (
     MatchStatus,
 )
 from .feature_extractor import CandidateFeatureExtractor, CandidateSignals
-from .scorers import RelevanceScorer, RuleFuzzyScorer
+from .scorers import FastRuleFuzzyScorer, RelevanceScorer
 
 
 ATTRIBUTE_ORDER = (
@@ -326,7 +326,7 @@ class SimpleReranker:
     ) -> None:
         self.constraint_matcher = constraint_matcher or ConstraintMatcher()
         self.feature_extractor = feature_extractor or CandidateFeatureExtractor()
-        self.relevance_scorer = relevance_scorer or RuleFuzzyScorer()
+        self.relevance_scorer = relevance_scorer or FastRuleFuzzyScorer()
         self.strategy_config = strategy_config or RerankerStrategyConfig()
 
     def rerank(
