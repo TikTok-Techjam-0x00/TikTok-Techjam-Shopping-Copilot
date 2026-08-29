@@ -5,15 +5,16 @@ import unittest
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.item import Candidate
 from src.retrieval import Catalog
-from src.retrieval.evaluate import evaluate_recall
-from src.retrieval.experiment_hybrid import compare_hybrid_methods
-from src.retrieval.experiment_text import run_text_ablation
+from src.retrieval.evaluation.first_turn import evaluate_recall
+from src.retrieval.evaluation.multiturn import evaluate_multiturn_recall
+from src.retrieval.experiments.hybrid_comparison import compare_hybrid_methods
+from src.retrieval.experiments.text_ablation import run_text_ablation
 
 
 PRODUCTS = [
@@ -71,6 +72,35 @@ class StaticDenseRetriever:
             Candidate(item=self.catalog["TARGET-2"], dense_score=0.9, retrieval_score=0.9, retrieval_rank=1),
             Candidate(item=self.catalog["TARGET-1"], dense_score=0.7, retrieval_score=0.7, retrieval_rank=2),
         ][:k]
+
+
+class TurnSequenceRetriever:
+    def __init__(self, catalog: Catalog) -> None:
+        self.catalog = catalog
+        self.calls = 0
+
+    def retrieve(
+        self,
+        query: str | None,
+        state: object | None = None,
+        intent: str | None = None,
+        k: int = 100,
+    ) -> list[Candidate]:
+        del query, state, intent
+        self.calls += 1
+        identifiers = (
+            ["OTHER", "TARGET-1"]
+            if self.calls == 1
+            else ["TARGET-1", "OTHER"]
+        )
+        return [
+            Candidate(
+                item=self.catalog[parent_asin],
+                retrieval_score=float(len(identifiers) - rank),
+                retrieval_rank=rank,
+            )
+            for rank, parent_asin in enumerate(identifiers[:k], start=1)
+        ]
 
 
 def _sample(sample_id: str, scenario: str, target: str) -> dict:
@@ -155,6 +185,37 @@ class RecallEvaluationTest(unittest.TestCase):
         )
         self.assertEqual(result["methods"]["union"]["overall"]["recall_at_1"], 1.0)
         self.assertIn("pool size <= 2K", result["config"]["union_semantics"])
+
+    def test_multiturn_recall_records_each_turn_and_cumulative_hit(self) -> None:
+        sample = {
+            **_sample("multi", "browsing", "TARGET-1"),
+            "intent_card": {
+                "target_category": "shirt",
+                "hard_constraints": ["soft cotton"],
+                "soft_preferences": ["black"],
+            },
+            "behavior": {"scenario_type": "browsing"},
+        }
+        result = evaluate_multiturn_recall(
+            TurnSequenceRetriever(self.catalog),
+            self.catalog,
+            [sample],
+            ks=(1, 2),
+            max_turns=2,
+            result_top_n=1,
+            stop_k=1,
+            continue_after_hit=True,
+            ask_policy=lambda state, candidates: "feature",
+        )
+
+        self.assertEqual(len(result["sessions"][0]["turns"]), 2)
+        self.assertEqual(result["turn_metrics"][0]["strict_recall"]["recall_at_1"], 0.0)
+        self.assertEqual(result["turn_metrics"][1]["strict_recall"]["recall_at_1"], 1.0)
+        self.assertEqual(result["turn_metrics"][0]["session_hit_rate_at_2"], 1.0)
+        self.assertEqual(result["overall"]["session_hit_rate_at_1"], 1.0)
+        self.assertEqual(result["sessions"][0]["turns"][1]["target_rank"], 1)
+        self.assertEqual(len(result["sessions"][0]["turns"][0]["top_results"]), 1)
+        self.assertFalse(result["sessions"][0]["turns"][1]["post_hit_counterfactual"])
 
 
 if __name__ == "__main__":

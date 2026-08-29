@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -27,7 +27,7 @@ from src.retrieval.embedding import (
     OpenAIEmbeddingEncoder,
     default_embedding_cache_dir,
 )
-from src.retrieval.evaluate import DEFAULT_KS, _official_initial_query, evaluate_recall
+from src.retrieval.evaluation.first_turn import DEFAULT_KS, _official_initial_query, evaluate_recall
 from src.retrieval.query import build_retrieval_query
 from src.retrieval.text import TEXT_CONFIGS
 

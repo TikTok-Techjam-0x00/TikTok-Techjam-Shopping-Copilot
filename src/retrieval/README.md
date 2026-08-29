@@ -1,6 +1,31 @@
 # 模块 1 — 检索（Retrieval）
 
-当前实验版本：`bm25_v0`。
+当前生产基线：`bm25_v0`；Dense与Hybrid暂时作为可切换实验策略。
+
+## 目录结构
+
+```text
+src/retrieval/
+  catalog.py / text.py / query.py       数据、商品文本与查询构造
+  bm25.py / dense.py / hybrid.py        可复用检索算法
+  embedding.py / multivector.py         向量缓存与多向量实现
+  retriever.py / __init__.py            给Pipeline和3A使用的稳定入口
+  evaluation/
+    first_turn.py                       首轮严格Recall评测
+    multiturn.py                        独立多轮全流程Retrieval评测
+  experiments/
+    README.md / PLAN.md / EXPERIMENTS.md 实验说明、规划和登记表
+    text_ablation.py                    BM25文本消融
+    query_instruction.py                Dense Query对照
+    dense_text.py                       Dense商品文本对照
+    hybrid_comparison.py                BM25/Dense/Union/Fusion对照
+    visualize_results.py                JSON转离线HTML报告
+  tools/build_embeddings.py             离线生成商品embedding
+  tests/                                Retrieval单元测试
+```
+
+根层只保留生产运行会复用的代码，实验、评测、工具和测试各自归类。详细实验执行
+顺序见 `experiments/PLAN.md`，已完成与待运行方案见 `experiments/EXPERIMENTS.md`。
 
 ## 商品文本版本
 
@@ -25,10 +50,10 @@ dense_needs_v1       material + color + size + style + use_case + features
 默认仍为 `all_fields_v4`，与原 `bm25_v0` 的字段范围一致。运行全部文本消融：
 
 ```powershell
-.\.venv\Scripts\python.exe src\retrieval\experiment_text.py
+.\.venv\Scripts\python.exe -m src.retrieval.experiments.text_ablation
 ```
 
-也可以在VSCode直接运行 `src/retrieval/experiment_text.py`。结果默认写入：
+也可以在VSCode直接运行 `src/retrieval/experiments/text_ablation.py`。结果默认写入：
 
 ```text
 artifacts/bm25_text_ablation.json
@@ -37,7 +62,7 @@ artifacts/bm25_text_ablation.json
 单独评估一个版本：
 
 ```powershell
-.\.venv\Scripts\python.exe src\retrieval\evaluate.py `
+.\.venv\Scripts\python.exe -m src.retrieval.evaluation.first_turn `
   --text-version core_v2 `
   --experiment bm25_core_v2
 ```
@@ -65,10 +90,10 @@ https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 Workspace。批量生成并缓存全部商品embedding：
 
 ```powershell
-.\.venv\Scripts\python.exe src\retrieval\build_embeddings.py
+.\.venv\Scripts\python.exe -m src.retrieval.tools.build_embeddings
 ```
 
-也可以在VSCode直接运行 `src/retrieval/build_embeddings.py`。默认缓存目录为：
+也可以在VSCode直接运行 `src/retrieval/tools/build_embeddings.py`。默认缓存目录为：
 
 ```text
 artifacts/retrieval/dense/
@@ -88,7 +113,7 @@ Catalog超过服务端每分钟Token限制；可通过
 `--workers` 调整，但应先观察账号的TPM限制：
 
 ```powershell
-.\.venv\Scripts\python.exe src\retrieval\build_embeddings.py --workers 1
+.\.venv\Scripts\python.exe -m src.retrieval.tools.build_embeddings --workers 1
 ```
 
 在线检索时只编码查询，然后用归一化查询向量和50,000商品矩阵做点积；因为两边
@@ -108,7 +133,7 @@ query_instruction  DashScope text_type=query，并加入英文检索任务指令
 原样复用。运行对照实验：
 
 ```powershell
-.\.venv\Scripts\python.exe src\retrieval\experiment_query_instruction.py
+.\.venv\Scripts\python.exe -m src.retrieval.experiments.query_instruction
 ```
 
 结果默认保存到 `artifacts/dense_query_instruction_v1.json`。
@@ -143,7 +168,7 @@ score = alpha * normalized_bm25 + (1 - alpha) * normalized_dense
 一键比较BM25、Dense、Union、RRF和Weighted Fusion：
 
 ```powershell
-.\.venv\Scripts\python.exe src\retrieval\experiment_hybrid.py
+.\.venv\Scripts\python.exe -m src.retrieval.experiments.hybrid_comparison
 ```
 
 默认结果保存到：
@@ -232,18 +257,19 @@ Catalog Loader 会跳过格式错误的记录；如果出现重复 ASIN，则保
 也可以在 VSCode 中直接打开并运行：
 
 ```text
-src/retrieval/test_retrieval.py
-src/retrieval/test_evaluate.py
+src/retrieval/tests/test_retrieval.py
+src/retrieval/tests/test_evaluation.py
 ```
 
-`test_retrieval.py` 验证 Catalog、查询构造、BM25、Top-K、去重、分数方向和确定性；`test_evaluate.py` 验证 Recall 的命中数量、排名和场景拆分是否计算正确。
+`test_retrieval.py` 验证 Catalog、查询构造、BM25、Top-K、去重、分数方向和确定性；
+`test_evaluation.py` 验证首轮/多轮Recall、排名、场景拆分和累计命中是否正确。
 
 ## 运行 Recall 评估
 
 执行可重复的首轮 Recall 评估：
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.retrieval.evaluate `
+.\.venv\Scripts\python.exe -m src.retrieval.evaluation.first_turn `
   --catalog data/catalog.jsonl `
   --dataset data/public_set.jsonl `
   --ks 10 50 100 `
@@ -254,12 +280,48 @@ src/retrieval/test_evaluate.py
 也可以在 VSCode 中直接运行：
 
 ```text
-src/retrieval/evaluate.py
+src/retrieval/evaluation/first_turn.py
 ```
 
 评估程序复用官方 public simulator，为每个 session 生成首轮用户消息。隐藏目标 ASIN 只用于生成官方模拟消息和判断返回排名，绝不会作为输入传给 Retriever。
 
 这个命令测量的是 Retrieval 的首轮 Recall，不是官方完整多轮评估中的 Hit Rate、MRR 或 MTTC。特别是 Intent Override 场景，在 override 正式发生前出现目标并不会被官方完整 evaluator 计为命中，因此首轮 Recall 只能作为检索诊断指标。
+
+## 独立多轮全流程评测
+
+多轮评测复用官方用户模拟、Module 2状态累计和当前3B追问策略，但在进入3A之前直接
+记录 Retrieval Top-K。默认严格遵循比赛停止规则：普通场景目标首次进入Top10即停止；
+Intent Override只有在override生效后的Top10命中才会停止：
+
+```powershell
+.\.venv\Scripts\python.exe -m src.retrieval.evaluation.multiturn `
+  --method bm25 `
+  --ks 10 50 100 `
+  --max-turns 10 `
+  --output artifacts/retrieval/multiturn_bm25_v1.json
+```
+
+可选方法为 `bm25`、`dense`、`hybrid_rrf` 和 `hybrid_weighted`。结果同时包含：
+
+- 每轮严格 `Recall@10/50/100`；
+- 截至每轮的累计 `Session HitRate@K`；
+- Buying、Browsing、Boundary、Intent Override场景拆分；
+- 每个Session每轮的message、state query、目标rank、延迟和Top-N结果；
+- Intent Override发生前的轮次标记为不可计分，不混入严格Recall分母。
+
+如果需要观察命中后的反事实查询变化，可额外传入 `--continue-after-hit`。这些后续轮次
+会标记为 `post_hit_counterfactual=true`，并只进入 `diagnostic_recall`，不进入官方
+严格逐轮Recall分母。
+
+生成可视化HTML：
+
+```powershell
+.\.venv\Scripts\python.exe -m src.retrieval.experiments.visualize_results `
+  artifacts/retrieval/multiturn_bm25_v1.json
+```
+
+该评测用于定位 Retrieval 问题，不替代官方端到端Evaluator；3B会影响下一轮用户披露
+什么，但目标标签不会传入Retrieval或3B。
 
 ## 已测基线
 
@@ -407,8 +469,8 @@ dense_attributes_v2_unlabeled  ...（相同值，但移除字段标签）
 必须分别生成全量缓存并对照Recall，不能只凭直觉选择：
 
 ```powershell
-.\.venv\Scripts\python.exe src\retrieval\build_embeddings.py --text-version dense_attributes_v2
-.\.venv\Scripts\python.exe src\retrieval\build_embeddings.py --text-version dense_attributes_v2_unlabeled
+.\.venv\Scripts\python.exe -m src.retrieval.tools.build_embeddings --text-version dense_attributes_v2
+.\.venv\Scripts\python.exe -m src.retrieval.tools.build_embeddings --text-version dense_attributes_v2_unlabeled
 ```
 
 严格对照已于2026-08-29完成。三套缓存共享同一批173个唯一Query instruction
@@ -459,8 +521,8 @@ needs    = Material + Color + Size + Style + Use case + Features
 允许任一路强匹配进入候选。对应缓存命令：
 
 ```powershell
-.\.venv\Scripts\python.exe src\retrieval\build_embeddings.py --text-version dense_identity_v1
-.\.venv\Scripts\python.exe src\retrieval\build_embeddings.py --text-version dense_needs_v1
+.\.venv\Scripts\python.exe -m src.retrieval.tools.build_embeddings --text-version dense_identity_v1
+.\.venv\Scripts\python.exe -m src.retrieval.tools.build_embeddings --text-version dense_needs_v1
 ```
 
 ## 后续实验

@@ -20,10 +20,10 @@ from pathlib import Path
 from typing import Any
 
 
-# Support both `python -m src.retrieval.evaluate` and VSCode's direct
+# Support both module execution and VSCode's direct
 # "Run Python File" action, which otherwise only adds this file's directory to
 # sys.path instead of the repository root.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

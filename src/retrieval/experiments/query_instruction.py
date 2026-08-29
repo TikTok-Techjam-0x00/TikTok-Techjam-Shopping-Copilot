@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -25,7 +25,7 @@ from src.retrieval.embedding import (
     OpenAIEmbeddingEncoder,
     default_embedding_cache_dir,
 )
-from src.retrieval.evaluate import (
+from src.retrieval.evaluation.first_turn import (
     DEFAULT_KS,
     _official_initial_query,
     evaluate_recall,

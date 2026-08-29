@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -19,7 +19,7 @@ from evaluator.local_evaluator import load_jsonl
 
 from src.retrieval.bm25 import BM25Retriever
 from src.retrieval.catalog import Catalog
-from src.retrieval.evaluate import DEFAULT_KS, evaluate_recall
+from src.retrieval.evaluation.first_turn import DEFAULT_KS, evaluate_recall
 from src.retrieval.text import TEXT_CONFIGS
 
 

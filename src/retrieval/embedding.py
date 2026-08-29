@@ -378,7 +378,8 @@ def load_embedding_cache(
     embeddings_path = directory / "embeddings.npy"
     if not (manifest_path.is_file() and asins_path.is_file() and embeddings_path.is_file()):
         raise EmbeddingCacheError(
-            f"complete embedding cache not found at {directory}; run build_embeddings.py first"
+            f"complete embedding cache not found at {directory}; "
+            "run python -m src.retrieval.tools.build_embeddings first"
         )
 
     manifest_raw = _read_json(manifest_path)
