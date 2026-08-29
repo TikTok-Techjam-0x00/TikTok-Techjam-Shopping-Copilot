@@ -44,6 +44,14 @@ class IntentClassifierTest(unittest.TestCase):
         self.assertEqual(result.intent, "unknown")
         self.assertEqual(result.confidence, 0.0)
 
+    def test_mixed_buying_and_browsing_signals_are_marked_as_conflict(self) -> None:
+        result = classify_intent("I want ideas for black shoes")
+
+        self.assertTrue(result.is_conflict)
+        self.assertFalse(result.is_clear)
+        self.assertIn("stated need", result.evidence)
+        self.assertIn("ideas or inspiration", result.evidence)
+
 
 if __name__ == "__main__":
     unittest.main()

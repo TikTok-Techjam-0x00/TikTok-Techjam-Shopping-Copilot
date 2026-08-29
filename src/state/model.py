@@ -89,6 +89,9 @@ class ShoppingState:
     semantic_fallback_used: bool = False
     semantic_fallback_count: int = 0
     semantic_fallback_reasons: list[str] = field(default_factory=list)
+    semantic_validation_errors: list[str] = field(default_factory=list)
+    intent_resolution_source: str = "default"
+    intent_smoothed: bool = False
 
     def _replace(self, target: AttributeMap, name: AttributeName, value: AttributeValue) -> None:
         target[name] = value.copy()
@@ -171,6 +174,9 @@ class ShoppingState:
             "semantic_fallback_used": self.semantic_fallback_used,
             "semantic_fallback_count": self.semantic_fallback_count,
             "semantic_fallback_reasons": list(self.semantic_fallback_reasons),
+            "semantic_validation_errors": list(self.semantic_validation_errors),
+            "intent_resolution_source": self.intent_resolution_source,
+            "intent_smoothed": self.intent_smoothed,
         }
 
     def copy(self) -> ShoppingState:
@@ -194,4 +200,7 @@ class ShoppingState:
             semantic_fallback_used=self.semantic_fallback_used,
             semantic_fallback_count=self.semantic_fallback_count,
             semantic_fallback_reasons=list(self.semantic_fallback_reasons),
+            semantic_validation_errors=list(self.semantic_validation_errors),
+            intent_resolution_source=self.intent_resolution_source,
+            intent_smoothed=self.intent_smoothed,
         )

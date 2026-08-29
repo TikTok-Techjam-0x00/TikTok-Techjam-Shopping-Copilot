@@ -16,6 +16,13 @@ class IntentResult:
     confidence: float
     is_override: bool = False
     evidence: tuple[str, ...] = ()
+    is_conflict: bool = False
+
+    @property
+    def is_clear(self) -> bool:
+        """Whether the high-precision rule layer can be used directly."""
+
+        return self.intent != "unknown" and not self.is_conflict and self.confidence >= 0.70
 
 
 BUYING_PATTERNS = {
@@ -58,12 +65,37 @@ def classify_intent(message: str, previous_intent: Intent = "unknown") -> Intent
     buying_score = len(buying) * 2
     browsing_score = len(browsing) * 2
 
+    # An explicit browsing phrase is an intentional override of generic search
+    # language such as "looking for" and remains a high-precision rule result.
+    if buying and "explicit browsing" in browsing:
+        return IntentResult(
+            "browsing",
+            0.86,
+            bool(override),
+            tuple(browsing + buying + override),
+        )
+
+    # Mixed rule families are not resolved by score alone. The provisional
+    # winner is retained for rule-only degradation, while the conflict flag
+    # routes a configured semantic resolver through the validation path.
+    if buying and browsing:
+        provisional: Intent = previous_intent
+        if buying_score > browsing_score:
+            provisional = "buying"
+        elif browsing_score > buying_score:
+            provisional = "browsing"
+        return IntentResult(
+            provisional,
+            0.45,
+            bool(override),
+            tuple(buying + browsing + override),
+            is_conflict=True,
+        )
+
     if buying_score > browsing_score:
         return IntentResult("buying", min(0.98, 0.72 + 0.08 * len(buying)), bool(override), tuple(buying + override))
     if browsing_score > buying_score:
         return IntentResult("browsing", min(0.98, 0.72 + 0.08 * len(browsing)), bool(override), tuple(browsing + override))
-    if buying_score == browsing_score and "explicit browsing" in browsing:
-        return IntentResult("browsing", 0.86, bool(override), tuple(browsing + buying + override))
     if previous_intent != "unknown" and CONSTRAINT_ONLY_PATTERN.search(text):
         return IntentResult(previous_intent, 0.78, bool(override), ("inherited from previous intent", *override))
     if previous_intent != "unknown" and not override:

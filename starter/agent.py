@@ -5,7 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.pipeline import Pipeline
-from src.state import SemanticPolicy, SemanticResolver
+from src.state import (
+    SemanticPolicy,
+    SemanticResolver,
+    qwen_semantic_resolver_from_env,
+)
+
+
+_AUTO_RESOLVER = object()
 
 
 class Agent:
@@ -15,12 +22,17 @@ class Agent:
         self,
         catalog_path: str | Path = "data/catalog.jsonl",
         *,
-        semantic_resolver: SemanticResolver | None = None,
+        semantic_resolver: SemanticResolver | None | object = _AUTO_RESOLVER,
         semantic_policy: SemanticPolicy | None = None,
     ) -> None:
+        configured_resolver = (
+            qwen_semantic_resolver_from_env()
+            if semantic_resolver is _AUTO_RESOLVER
+            else semantic_resolver
+        )
         self.pipeline = Pipeline(
             catalog_path,
-            semantic_resolver=semantic_resolver,
+            semantic_resolver=configured_resolver,
             semantic_policy=semantic_policy,
         )
 

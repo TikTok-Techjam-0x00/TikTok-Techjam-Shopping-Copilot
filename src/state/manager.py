@@ -13,6 +13,8 @@ from .semantic import (
     build_semantic_request,
     decide_semantic_fallback,
     merge_rule_and_semantic,
+    resolve_final_intent,
+    validate_semantic_resolution,
 )
 from .slots import extract_slots
 
@@ -60,8 +62,9 @@ def update_state(
     )
     state.semantic_fallback_used = False
     state.semantic_fallback_reasons = list(decision.reasons)
+    state.semantic_validation_errors = []
     update = rule_update
-    semantic_confidence: float | None = None
+    semantic_resolution = None
     if decision.should_resolve and semantic_resolver is not None:
         state.semantic_fallback_used = True
         state.semantic_fallback_count += 1
@@ -74,21 +77,36 @@ def update_state(
             policy=selected_policy,
         )
         try:
-            resolution = semantic_resolver.resolve(request)
+            raw_resolution = semantic_resolver.resolve(request)
         except Exception:
-            resolution = None
-        if resolution is not None:
-            semantic_confidence = resolution.confidence
+            raw_resolution = None
+            state.semantic_validation_errors = ["semantic_resolver_failed"]
+        if raw_resolution is not None:
+            semantic_resolution, validation_errors = validate_semantic_resolution(
+                raw_resolution,
+                policy=selected_policy,
+            )
+            state.semantic_validation_errors = list(validation_errors)
+        elif not state.semantic_validation_errors:
+            state.semantic_validation_errors = ["empty_or_invalid_semantic_result"]
+        if semantic_resolution is not None:
             update = merge_rule_and_semantic(
                 rule_update,
-                resolution.update,
+                semantic_resolution.update,
                 prefer_semantic_intent=(
                     result.intent == "unknown"
                     or result.confidence < selected_policy.intent_confidence_threshold
                 ),
             )
 
-    next_intent = update.intent or state.intent
+    final_intent = resolve_final_intent(
+        result,
+        semantic_resolution,
+        state,
+        policy=selected_policy,
+    )
+    update.intent = final_intent.intent
+    next_intent = final_intent.intent
     intent_changed = bool(state.history) and next_intent != state.intent
     effective_override = update.override or intent_changed
     update.override = effective_override
@@ -96,7 +114,9 @@ def update_state(
     if intent_changed and next_intent == "browsing":
         update.clear_hard_constraint = True
     state.apply_update(update)
-    state.intent_confidence = semantic_confidence if semantic_confidence is not None else result.confidence
+    state.intent_confidence = final_intent.confidence
+    state.intent_resolution_source = final_intent.source
+    state.intent_smoothed = final_intent.smoothed
     state.user_message = user_message
     state.turn = turn if turn is not None else state.turn + 1
     if intent_changed:
