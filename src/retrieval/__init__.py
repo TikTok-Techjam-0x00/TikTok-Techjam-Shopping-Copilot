@@ -25,6 +25,7 @@ from .hybrid import (
 from .multivector import MultiVectorConfig, MultiVectorDenseRetriever
 from .query import build_retrieval_query
 from .retriever import Retriever, retrieve
+from .routing import IntentRoutedRetriever, IntentRoutingConfig
 from .text import (
     DEFAULT_TEXT_VERSION,
     TEXT_CONFIGS,
@@ -60,6 +61,8 @@ __all__ = [
     "MultiVectorConfig",
     "MultiVectorDenseRetriever",
     "Retriever",
+    "IntentRoutedRetriever",
+    "IntentRoutingConfig",
     "build_retrieval_query",
     "retrieve",
     "ProductTextConfig",

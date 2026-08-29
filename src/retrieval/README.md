@@ -1,6 +1,7 @@
 # 模块 1 — 检索（Retrieval）
 
-当前生产基线：`bm25_v0`；Dense与Hybrid暂时作为可切换实验策略。
+当前生产基线：`bm25_intent_routing_warm_start_v2`；Dense与Hybrid暂时作为可切换
+实验策略。
 
 ## 目录结构
 
@@ -8,6 +9,7 @@
 src/retrieval/
   catalog.py / text.py / query.py       数据、商品文本与查询构造
   bm25.py / dense.py / hybrid.py        可复用检索算法
+  routing.py                            Buying/Browsing策略路由
   embedding.py / multivector.py         向量缓存与多向量实现
   retriever.py / __init__.py            给Pipeline和3A使用的稳定入口
   evaluation/
@@ -19,6 +21,7 @@ src/retrieval/
     query_instruction.py                Dense Query对照
     dense_text.py                       Dense商品文本对照
     hybrid_comparison.py                BM25/Dense/Union/Fusion对照
+    intent_routing.py                   Intent路由可靠性实验
     visualize_results.py                JSON转离线HTML报告
   tools/build_embeddings.py             离线生成商品embedding
   tests/                                Retrieval单元测试
@@ -165,6 +168,42 @@ score = alpha * normalized_bm25 + (1 - alpha) * normalized_dense
 如果在线Dense查询调用失败，`HybridRetriever` 默认回退到BM25；实验脚本则应在
 有效缓存和API配置下运行，避免把fallback误记为Dense结果。
 
+队友拉取代码后可以直接切换并测试两种Hybrid，不需要重新生成50,000个商品
+embedding：
+
+```python
+from src.retrieval import OpenAIEmbeddingEncoder, Retriever
+
+encoder = OpenAIEmbeddingEncoder.from_env()
+
+rrf_retriever = Retriever.bm25_dense_rrf(
+    "data/catalog.jsonl",
+    encoder,
+)
+weighted_retriever = Retriever.bm25_dense_weighted(
+    "data/catalog.jsonl",
+    encoder,
+    alpha=0.5,
+)
+
+rrf_candidates_100 = rrf_retriever.retrieve(
+    query,
+    state=shopping_state,
+    intent=intent,
+    k=100,
+)
+weighted_candidates_100 = weighted_retriever.retrieve(
+    query,
+    state=shopping_state,
+    intent=intent,
+    k=100,
+)
+```
+
+两个入口默认读取仓库中的 `all_fields_v4` 缓存，Dense query使用
+`query_instruction`；RRF默认 `rank_constant=60`，Weighted默认
+`alpha=0.5`。二者都输出去重且严格排序的Top-K `Candidate`，可以直接交给3A。
+
 一键比较BM25、Dense、Union、RRF和Weighted Fusion：
 
 ```powershell
@@ -179,6 +218,47 @@ artifacts/retrieval_hybrid_comparison.json
 
 其中Union的 `Recall@K` 定义为目标进入“BM25 Top-K或Dense Top-K”，对应物理
 候选池最多为 `2K`；RRF和Weighted Fusion的 `Recall@K` 是严格排序后的Top-K。
+
+## Buying / Browsing 路由基线
+
+生产Pipeline现在使用一个保守的warm-start路由：
+
+```text
+Buying                         -> all_fields_v4
+Browsing Turn 1               -> title_category_v1
+Browsing Turn 2及以后          -> all_fields_v4
+未知Intent                     -> all_fields_v4
+```
+
+独立调用入口为：
+
+```python
+warm_start_retriever = Retriever.bm25_intent_routed("data/catalog.jsonl")
+candidates_100 = warm_start_retriever.retrieve(
+    query,
+    state=shopping_state,
+    intent=intent,
+    k=100,
+)
+```
+
+队友首次拉取带向量缓存的仓库时执行：
+
+```powershell
+git lfs install
+git pull origin beta
+git lfs pull
+git lfs ls-files
+```
+
+最后一个命令应能看到三条 `embeddings.npy`。这些是商品向量；运行Dense或Hybrid
+时每条新query仍需调用embedding服务，因此本地 `.env` 仍要配置有效Key，但绝不能
+提交 `.env` 或API Key。
+
+全程让Browsing使用短文本会使后续material/feature等新约束无法匹配，因此该方案已
+被实验否决。仅首轮使用短文本在200个多轮Session上通过无场景回退门槛：Top10
+Session HitRate由0.790升至0.795，MTTC由5.780降至5.600，Top100覆盖保持0.965。
+路由只选择一个BM25结果，不做候选融合，传给3A的Candidate字段和分数语义不变。
 
 ## 数据流程
 
@@ -301,7 +381,8 @@ Intent Override只有在override生效后的Top10命中才会停止：
   --output artifacts/retrieval/multiturn_bm25_v1.json
 ```
 
-可选方法为 `bm25`、`dense`、`hybrid_rrf` 和 `hybrid_weighted`。结果同时包含：
+可选方法为 `bm25`、`bm25_routed`、`dense`、`hybrid_rrf` 和
+`hybrid_weighted`。结果同时包含：
 
 - 每轮严格 `Recall@10/50/100`；
 - 截至每轮的累计 `Session HitRate@K`；

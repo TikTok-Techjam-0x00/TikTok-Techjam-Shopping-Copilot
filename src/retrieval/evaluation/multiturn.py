@@ -51,12 +51,13 @@ from src.retrieval.evaluation.first_turn import (
 )
 from src.retrieval.hybrid import HybridConfig, HybridRetriever
 from src.retrieval.retriever import RetrievalStrategy
+from src.retrieval.routing import IntentRoutedRetriever, IntentRoutingConfig
 from src.retrieval.text import DEFAULT_TEXT_VERSION, TEXT_CONFIGS
 from src.state import create_state, retrieval_query, sanitize_retrieval_text, update_state
 
 
 AskPolicy = Callable[[object, Sequence[Candidate]], Mapping[str, Any] | str | None]
-METHODS = ("bm25", "dense", "hybrid_rrf", "hybrid_weighted")
+METHODS = ("bm25", "bm25_routed", "dense", "hybrid_rrf", "hybrid_weighted")
 
 
 def _target_rank(candidates: Sequence[Candidate], target: str, max_k: int) -> int | None:
@@ -129,6 +130,7 @@ def _turn_metrics(
                 and int(item["target_rank"]) <= k
             }
             row[f"cumulative_hits_at_{k}"] = len(hit_sessions)
+            row[f"remaining_unhit_at_{k}"] = len(session_ids) - len(hit_sessions)
             row[f"session_hit_rate_at_{k}"] = (
                 round(len(hit_sessions) / len(session_ids), 6) if session_ids else 0.0
             )
@@ -407,6 +409,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep post-hit turns as counterfactual diagnostics instead of official stopping.",
     )
     parser.add_argument("--bm25-text-version", choices=tuple(TEXT_CONFIGS), default=DEFAULT_TEXT_VERSION)
+    parser.add_argument(
+        "--browsing-text-version",
+        choices=tuple(TEXT_CONFIGS),
+        default="title_category_v1",
+    )
+    parser.add_argument(
+        "--browsing-max-turn",
+        type=int,
+        default=1,
+        help="Use the Browsing strategy through this turn, then return to Buying strategy.",
+    )
     parser.add_argument("--dense-text-version", choices=tuple(TEXT_CONFIGS), default=DEFAULT_TEXT_VERSION)
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--query-instruction", default=DEFAULT_QUERY_INSTRUCTION)
@@ -427,6 +440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         samples = samples[: args.limit]
 
     bm25: BM25Retriever | None = None
+    browsing_bm25: BM25Retriever | None = None
     dense: DenseRetriever | None = None
     encoder: OpenAIEmbeddingEncoder | None = None
     if args.method == "bm25":
@@ -435,6 +449,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             text_version=args.bm25_text_version,
         )
         bm25 = strategy
+    elif args.method == "bm25_routed":
+        bm25 = BM25Retriever(catalog, text_version=args.bm25_text_version)
+        browsing_bm25 = BM25Retriever(
+            catalog,
+            text_version=args.browsing_text_version,
+        )
+        strategy = IntentRoutedRetriever(
+            bm25,
+            browsing_bm25,
+            config=IntentRoutingConfig(browsing_max_turn=args.browsing_max_turn),
+        )
     else:
         encoder = OpenAIEmbeddingEncoder.from_env()
         cache_dir = args.cache_dir or PROJECT_ROOT / default_embedding_cache_dir(
@@ -482,6 +507,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             dense.close()
         if bm25 is not None:
             bm25.close()
+        if browsing_bm25 is not None:
+            browsing_bm25.close()
 
     result = {
         "experiment": f"multiturn_{args.method}_v1",
@@ -491,7 +518,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "catalog_items": len(catalog),
         "catalog_stats": asdict(catalog.stats),
         "bm25_text_version": args.bm25_text_version,
-        "dense_text_version": args.dense_text_version if args.method != "bm25" else None,
+        "browsing_text_version": (
+            args.browsing_text_version if args.method == "bm25_routed" else None
+        ),
+        "browsing_max_turn": (
+            args.browsing_max_turn if args.method == "bm25_routed" else None
+        ),
+        "dense_text_version": args.dense_text_version if encoder is not None else None,
         "embedding_model": encoder.model if encoder is not None else None,
         "query_instruction": args.query_instruction if encoder is not None else None,
         "source_k": args.source_k if args.method.startswith("hybrid") else None,

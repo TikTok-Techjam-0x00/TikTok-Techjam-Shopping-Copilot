@@ -15,6 +15,7 @@ from src.retrieval.evaluation.first_turn import evaluate_recall
 from src.retrieval.evaluation.multiturn import evaluate_multiturn_recall
 from src.retrieval.experiments.hybrid_comparison import compare_hybrid_methods
 from src.retrieval.experiments.text_ablation import run_text_ablation
+from src.retrieval.experiments.visualize_results import render_html
 
 
 PRODUCTS = [
@@ -200,7 +201,7 @@ class RecallEvaluationTest(unittest.TestCase):
             TurnSequenceRetriever(self.catalog),
             self.catalog,
             [sample],
-            ks=(1, 2),
+            ks=(1, 2, 10, 100),
             max_turns=2,
             result_top_n=1,
             stop_k=1,
@@ -211,11 +212,23 @@ class RecallEvaluationTest(unittest.TestCase):
         self.assertEqual(len(result["sessions"][0]["turns"]), 2)
         self.assertEqual(result["turn_metrics"][0]["strict_recall"]["recall_at_1"], 0.0)
         self.assertEqual(result["turn_metrics"][1]["strict_recall"]["recall_at_1"], 1.0)
+        self.assertEqual(result["turn_metrics"][0]["officially_active_count"], 1)
+        self.assertEqual(result["turn_metrics"][0]["remaining_unhit_at_1"], 1)
+        self.assertEqual(result["turn_metrics"][1]["remaining_unhit_at_1"], 0)
         self.assertEqual(result["turn_metrics"][0]["session_hit_rate_at_2"], 1.0)
         self.assertEqual(result["overall"]["session_hit_rate_at_1"], 1.0)
         self.assertEqual(result["sessions"][0]["turns"][1]["target_rank"], 1)
         self.assertEqual(len(result["sessions"][0]["turns"][0]["top_results"]), 1)
         self.assertFalse(result["sessions"][0]["turns"][1]["post_hit_counterfactual"])
+
+        report = render_html(result)
+        self.assertIn("总体：逐轮 Retrieval Hit@100", report)
+        self.assertIn("命中 1/1（100.0%） · 未命中 0", report)
+        self.assertIn("四场景 Retrieval 整体效果", report)
+        self.assertIn("单轮 Conditional Hit@100", report)
+        self.assertIn("展开严格 Recall 与 Top50/100 诊断", report)
+        self.assertIn("固定实验流程", report)
+        self.assertNotIn('"sample_id"', report)
 
 
 if __name__ == "__main__":

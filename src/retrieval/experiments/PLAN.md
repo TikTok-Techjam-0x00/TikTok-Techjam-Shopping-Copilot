@@ -37,12 +37,15 @@ source_k / fusion_parameters / metadata_policy / Recall / latency / cache_size
 - Source K：50、100、150、200，最终输出仍严格Top100。
 - 判定：优先Recall@100，Top10不能出现不可接受回退。
 
-### P3：Buying / Browsing路由（RET-009）
+### P3：Buying / Browsing路由（RET-009，已完成）
 
-- Buying：属性Dense与metadata boost权重更高。
-- Browsing：BM25 + Dense Union覆盖更广，减少硬过滤。
+- Buying：使用`all_fields_v4`完整字段BM25。
+- Browsing：仅首轮使用`title_category_v1`，第二轮起恢复`all_fields_v4`。
 - Boundary：不把no-preference字段继续加入Query。
 - Intent Override：只消费覆盖后的State，禁止旧偏好泄漏。
+
+全程使用短Browsing文本的RET-009A失败；首轮warm-start的RET-009B通过总体、MTTC和
+所有场景Top10/Top100无回退门槛，已经作为新Pipeline基线。
 
 ### P4：Metadata boosting（RET-011）
 

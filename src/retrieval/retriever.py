@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from ..item import Candidates100
 from .bm25 import BM25Retriever, BM25Weights
+from .catalog import Catalog
 from .text import DEFAULT_TEXT_VERSION, ProductTextConfig
 
 if TYPE_CHECKING:
@@ -71,6 +72,36 @@ class Retriever:
         )
 
     @classmethod
+    def bm25_intent_routed(
+        cls,
+        catalog_path: str,
+        *,
+        buying_text_version: str | ProductTextConfig = DEFAULT_TEXT_VERSION,
+        browsing_text_version: str | ProductTextConfig = "title_category_v1",
+        browsing_max_turn: int | None = 1,
+        weights: BM25Weights | None = None,
+    ) -> Retriever:
+        """Use detailed text for Buying and concise title/category for Browsing."""
+        from .routing import IntentRoutedRetriever, IntentRoutingConfig
+
+        catalog = Catalog.load(catalog_path)
+        return cls(
+            IntentRoutedRetriever(
+                BM25Retriever(
+                    catalog,
+                    weights=weights,
+                    text_version=buying_text_version,
+                ),
+                BM25Retriever(
+                    catalog,
+                    weights=weights,
+                    text_version=browsing_text_version,
+                ),
+                config=IntentRoutingConfig(browsing_max_turn=browsing_max_turn),
+            )
+        )
+
+    @classmethod
     def hybrid(
         cls,
         bm25: RetrievalStrategy,
@@ -80,6 +111,103 @@ class Retriever:
     ) -> Retriever:
         from .hybrid import HybridRetriever
 
+        return cls(HybridRetriever(bm25, dense, config=config))
+
+    @classmethod
+    def bm25_dense_rrf(
+        cls,
+        catalog_path: str,
+        encoder: EmbeddingEncoder,
+        cache_dir: str | Path | None = None,
+        *,
+        text_version: str = DEFAULT_TEXT_VERSION,
+        source_k: int = 100,
+        rank_constant: float = 60.0,
+        query_embedding_mode: str = "query_instruction",
+        query_instruction: str | None = None,
+        fallback_to_bm25: bool = True,
+    ) -> Retriever:
+        """Build the team-ready BM25 + Dense reciprocal-rank fusion strategy."""
+        from .hybrid import HybridConfig
+
+        return cls._bm25_dense(
+            catalog_path,
+            encoder,
+            cache_dir,
+            text_version=text_version,
+            query_embedding_mode=query_embedding_mode,
+            query_instruction=query_instruction,
+            config=HybridConfig(
+                method="rrf",
+                source_k=source_k,
+                rank_constant=rank_constant,
+                fallback_to_bm25=fallback_to_bm25,
+            ),
+        )
+
+    @classmethod
+    def bm25_dense_weighted(
+        cls,
+        catalog_path: str,
+        encoder: EmbeddingEncoder,
+        cache_dir: str | Path | None = None,
+        *,
+        text_version: str = DEFAULT_TEXT_VERSION,
+        source_k: int = 100,
+        alpha: float = 0.5,
+        query_embedding_mode: str = "query_instruction",
+        query_instruction: str | None = None,
+        fallback_to_bm25: bool = True,
+    ) -> Retriever:
+        """Build the team-ready normalized BM25 + Dense weighted strategy."""
+        from .hybrid import HybridConfig
+
+        return cls._bm25_dense(
+            catalog_path,
+            encoder,
+            cache_dir,
+            text_version=text_version,
+            query_embedding_mode=query_embedding_mode,
+            query_instruction=query_instruction,
+            config=HybridConfig(
+                method="weighted",
+                source_k=source_k,
+                alpha=alpha,
+                fallback_to_bm25=fallback_to_bm25,
+            ),
+        )
+
+    @classmethod
+    def _bm25_dense(
+        cls,
+        catalog_path: str,
+        encoder: EmbeddingEncoder,
+        cache_dir: str | Path | None,
+        *,
+        text_version: str,
+        query_embedding_mode: str,
+        query_instruction: str | None,
+        config: HybridConfig,
+    ) -> Retriever:
+        from .dense import DenseRetriever
+        from .embedding import default_embedding_cache_dir
+        from .hybrid import HybridRetriever
+
+        catalog = Catalog.load(catalog_path)
+        resolved_cache = cache_dir or default_embedding_cache_dir(
+            encoder.model,
+            encoder.dimension,
+            text_version,
+        )
+        bm25 = BM25Retriever(catalog, text_version=text_version)
+        dense = DenseRetriever(
+            catalog,
+            encoder,
+            resolved_cache,
+            text_version=text_version,
+            query_embedding_mode=query_embedding_mode,
+            query_instruction=query_instruction,
+        )
         return cls(HybridRetriever(bm25, dense, config=config))
 
     def retrieve(

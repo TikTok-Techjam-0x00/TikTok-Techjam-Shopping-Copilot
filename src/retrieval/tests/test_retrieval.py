@@ -22,6 +22,8 @@ from src.retrieval import (
     DenseRetriever,
     HybridConfig,
     HybridRetriever,
+    IntentRoutedRetriever,
+    IntentRoutingConfig,
     MultiVectorConfig,
     MultiVectorDenseRetriever,
     Retriever,
@@ -483,6 +485,44 @@ class HybridRetrievalTest(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].parent_asin, "B")
 
+    def test_team_ready_factories_load_default_cache_and_select_fusion(self) -> None:
+        encoder = FakeEmbeddingEncoder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog_path = root / "catalog.jsonl"
+            catalog_path.write_text(
+                "".join(json.dumps(product) + "\n" for product in PRODUCTS),
+                encoding="utf-8",
+            )
+            cache_dir = root / "cache"
+            cache = build_embedding_cache(
+                Catalog.load(catalog_path),
+                encoder,
+                cache_dir,
+                text_version="all_fields_v4",
+            )
+            cache.close()
+
+            rrf = Retriever.bm25_dense_rrf(
+                str(catalog_path),
+                encoder,
+                cache_dir,
+            )
+            weighted = Retriever.bm25_dense_weighted(
+                str(catalog_path),
+                encoder,
+                cache_dir,
+                alpha=0.7,
+            )
+            try:
+                self.assertEqual(rrf.strategy.config.method, "rrf")
+                self.assertEqual(weighted.strategy.config.method, "weighted")
+                self.assertEqual(weighted.strategy.config.alpha, 0.7)
+            finally:
+                for retriever in (rrf.strategy, weighted.strategy):
+                    retriever.bm25.close()
+                    retriever.dense.close()
+
 
 class MultiVectorDenseRetrieverTest(unittest.TestCase):
     def test_weighted_and_max_fusion_return_ranked_candidates(self) -> None:
@@ -520,6 +560,67 @@ class MultiVectorDenseRetrieverTest(unittest.TestCase):
                     retriever.close()
                 self.assertEqual(result[0].parent_asin, "HIKE-1")
                 self.assertEqual([value.retrieval_rank for value in result], [1, 2])
+
+
+class IntentRoutedRetrieverTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.catalog = Catalog.from_items(PRODUCTS)
+
+        class StaticSource:
+            def __init__(source_self, parent_asin: str) -> None:
+                source_self.parent_asin = parent_asin
+                source_self.calls = 0
+                source_self.catalog = self.catalog
+
+            def retrieve(source_self, query, state=None, intent=None, k=100):
+                del query, state, intent
+                source_self.calls += 1
+                return [
+                    Candidate(
+                        item=self.catalog[source_self.parent_asin],
+                        retrieval_score=1.0,
+                        retrieval_rank=1,
+                    )
+                ][:k]
+
+        self.buying = StaticSource("HIKE-1")
+        self.browsing = StaticSource("RUN-1")
+        self.retriever = IntentRoutedRetriever(self.buying, self.browsing)
+
+    def test_shared_catalog_is_exposed_for_pipeline_integration(self) -> None:
+        self.assertIs(self.retriever.catalog, self.catalog)
+
+    def test_explicit_intent_selects_one_strategy_without_merging(self) -> None:
+        buying = self.retriever.retrieve("shoes", intent="buying")
+        browsing = self.retriever.retrieve("shoes", intent="browsing")
+
+        self.assertEqual(buying[0].parent_asin, "HIKE-1")
+        self.assertEqual(browsing[0].parent_asin, "RUN-1")
+        self.assertEqual(self.buying.calls, 1)
+        self.assertEqual(self.browsing.calls, 1)
+
+    def test_state_intent_is_used_and_unknown_has_configurable_fallback(self) -> None:
+        result = self.retriever.retrieve("shoes", state={"intent": "browsing"})
+        self.assertEqual(result[0].parent_asin, "RUN-1")
+
+        fallback = IntentRoutedRetriever(
+            self.buying,
+            self.browsing,
+            config=IntentRoutingConfig(unknown_route="browsing"),
+        )
+        self.assertEqual(fallback.retrieve("shoes")[0].parent_asin, "RUN-1")
+
+    def test_browsing_warm_start_returns_to_detailed_strategy(self) -> None:
+        warm_start = IntentRoutedRetriever(
+            self.buying,
+            self.browsing,
+            config=IntentRoutingConfig(browsing_max_turn=1),
+        )
+        first = warm_start.retrieve("shoes", state={"intent": "browsing", "turn": 1})
+        later = warm_start.retrieve("shoes", state={"intent": "browsing", "turn": 2})
+
+        self.assertEqual(first[0].parent_asin, "RUN-1")
+        self.assertEqual(later[0].parent_asin, "HIKE-1")
 
 
 if __name__ == "__main__":
