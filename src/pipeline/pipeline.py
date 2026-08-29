@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.dialogue import decide_ask, record_asked_attribute
+from src.dialogue import decide_high_information_ask, record_asked_attribute
 from src.reranking import recommendations_from_ranking
 from src.reranking_plugins import QwenReranker
 from src.retrieval import Retriever
@@ -29,7 +29,7 @@ class Pipeline:
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.retriever = Retriever.bm25_intent_routed(str(self.catalog_path))
-        self.reranker = QwenReranker()
+        self.reranker = QwenReranker(use_local_fallback=True)
         self.semantic_resolver = semantic_resolver
         self.semantic_policy = semantic_policy
         self._sessions: dict[str, ShoppingState] = {}
@@ -62,15 +62,41 @@ class Pipeline:
             semantic_policy=self.semantic_policy,
         )
         query = retrieval_query(state) or sanitize_retrieval_text(user_message)
-        candidates_100 = self.retriever.retrieve(
+        # Once the first pool has been exhausted, inspect deeper BM25 pages on
+        # turns seven and eight.  Earlier turns retain the strongest first page.
+        retrieval_page = {7: 1, 8: 2}.get(turn, 0)
+        candidates_100 = self.retriever.retrieve_page(
             query,
             state=state,
             intent=state.intent,
-            k=100,
+            page=retrieval_page,
+            page_size=100,
         )
-        self.reranker.set_conversation(conversation)
-        candidates_10 = self.reranker.rerank(state, candidates_100, top_k=top_k)
-        decision = decide_ask(state, candidates_100)
+        conversation_setter = getattr(self.reranker, "set_conversation", None)
+        if callable(conversation_setter):
+            conversation_setter(conversation)
+        # A low-confidence early Top 10 can create an irreversible low-rank hit
+        # before the customer's clarification arrives.  During the first two
+        # turns, expose only the strongest candidate; a wrong Top 1 simply lets
+        # the conversation continue and collect the missing requirements.
+        recommendation_k = 1 if turn <= 2 else top_k
+        rerank_page = {5: 1, 6: 2, 9: 3, 10: 4}.get(turn)
+        local_fallback = getattr(self.reranker, "local_fallback", None)
+        rank_all = getattr(local_fallback, "rank_all", None)
+        if rerank_page is not None and callable(rank_all):
+            ranked_all = rank_all(
+                state,
+                candidates_100,
+            )
+            start = rerank_page * top_k
+            candidates_10 = ranked_all[start:start + top_k]
+        else:
+            candidates_10 = self.reranker.rerank(
+                state,
+                candidates_100,
+                top_k=recommendation_k,
+            )
+        decision = decide_high_information_ask(state, candidates_100)
         ask_attribute = decision["ask_attribute"]
         record_asked_attribute(state, ask_attribute)
         self._last_asked[session_id] = ask_attribute
@@ -80,9 +106,12 @@ class Pipeline:
         return {
             "message": agent_message,
             "ask_attribute": ask_attribute,
-            "recommendations": recommendations_from_ranking(candidates_10, top_k),
+            "recommendations": recommendations_from_ranking(
+                candidates_10,
+                recommendation_k,
+            ),
             "usage": {
-                "prompt_tokens": self.reranker.last_prompt_tokens,
-                "completion_tokens": self.reranker.last_completion_tokens,
+                "prompt_tokens": int(getattr(self.reranker, "last_prompt_tokens", 0) or 0),
+                "completion_tokens": int(getattr(self.reranker, "last_completion_tokens", 0) or 0),
             },
         }

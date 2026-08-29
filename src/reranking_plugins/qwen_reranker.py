@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from src.item import Candidate, Candidates10, RankedCandidate
+from src.reranking import EvidenceCoverageReranker
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -111,12 +112,19 @@ def _parse_parent_asins(content: object) -> list[str]:
 class QwenReranker:
     """Rerank retrieval candidates using Qwen without changing core models."""
 
-    def __init__(self, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        client: Any | None = None,
+        *,
+        use_local_fallback: bool = False,
+    ) -> None:
         load_dotenv(REPOSITORY_ROOT / ".env")
         self.api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
         self.base_url = os.getenv("QWEN_BASE_URL", "").strip()
         self.model = os.getenv("QWEN_MODEL", "qwen-plus").strip() or "qwen-plus"
         self._provided_client = client
+        self.use_local_fallback = bool(use_local_fallback)
+        self.local_fallback = EvidenceCoverageReranker()
         self._conversation: list[dict[str, str]] = []
         self.last_prompt_tokens = 0
         self.last_completion_tokens = 0
@@ -195,6 +203,13 @@ class QwenReranker:
             requested_order = self._rank_with_qwen(candidates, top_k)
         except Exception:
             requested_order = []
+
+        if not requested_order and self.use_local_fallback:
+            return self.local_fallback.rerank(
+                shopping_state,
+                candidates,
+                top_k=top_k,
+            )
 
         by_asin = {candidate.parent_asin: candidate for candidate in candidates}
         selected: list[Candidate] = []

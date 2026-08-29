@@ -16,7 +16,12 @@ NO_PREFERENCE_RE = re.compile(
     r"(?:don['’]?t|do not) have (?:an? )?(?:additional )?preference for\s+([a-z_]+)|no preference for\s+([a-z_]+)",
     re.I,
 )
-BUDGET_RE = re.compile(r"(?:under|below|less than|no more than|up to|max(?:imum)?)\s*[$£€]?\s*(\d+(?:\.\d+)?)", re.I)
+BUDGET_RE = re.compile(
+    r"(?:under|below|less than|no more than|up to|max(?:imum)?)"
+    r"\s*[$£€]?\s*(\d+(?:\.\d+)?)"
+    r"(?!\s*(?:-|inches?|in\b|cm\b|mm\b|feet\b|foot\b|ft\b))",
+    re.I,
+)
 MONEY_RE = re.compile(r"[$£€]\s*(\d+(?:\.\d+)?)")
 CATEGORY_PATTERNS = (
     re.compile(r"(?:i(?:'m| am) looking for|i need(?!\s+is\s*:)|i want|find me|show me)\s+(?:an?\s+)?(.+?)(?=\.|,|;|\bunder\b|\bbelow\b|\bwith\b|\bthat\b|$)", re.I),

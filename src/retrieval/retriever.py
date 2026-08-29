@@ -219,6 +219,30 @@ class Retriever:
     ) -> Candidates100:
         return self.strategy.retrieve(query, state, intent, k)
 
+    def retrieve_page(
+        self,
+        query: str | None,
+        state: object | None = None,
+        intent: str | None = None,
+        *,
+        page: int = 0,
+        page_size: int = 100,
+    ) -> Candidates100:
+        """Return one deterministic page from a deeper strategy result.
+
+        Later conversation turns can use this to explore beyond an exhausted
+        first candidate pool without changing the RetrievalStrategy contract.
+        """
+
+        if isinstance(page, bool) or not isinstance(page, int) or page < 0:
+            raise ValueError("page must be a non-negative integer")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or page_size <= 0:
+            raise ValueError("page_size must be a positive integer")
+        stop = (page + 1) * page_size
+        candidates = self.strategy.retrieve(query, state, intent, stop)
+        start = page * page_size
+        return candidates[start:stop]
+
 
 def retrieve(
     retriever: RetrievalStrategy,

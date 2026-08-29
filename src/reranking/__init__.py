@@ -42,6 +42,7 @@ from .reranker import (
     recommendations_from_ranking,
     rerank,
 )
+from .evidence import EvidenceCoverageReranker
 
 __all__ = [
     "Item",
@@ -76,4 +77,5 @@ __all__ = [
     "SimpleReranker",
     "rerank",
     "recommendations_from_ranking",
+    "EvidenceCoverageReranker",
 ]

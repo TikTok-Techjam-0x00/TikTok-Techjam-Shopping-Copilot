@@ -4,7 +4,7 @@ import json
 import unittest
 
 from src.attribute import AttributeName
-from src.dialogue import decide_ask
+from src.dialogue import decide_ask, decide_high_information_ask
 from src.state import StateUpdate
 from src.state import (
     create_state,
@@ -15,6 +15,27 @@ from src.state import (
 
 
 class ConversationStateTest(unittest.TestCase):
+    def test_high_information_dialogue_uses_three_progressive_open_questions(self) -> None:
+        expected_messages = (
+            "Are there any must-have details I should prioritize?",
+            "What features or preferences matter most to you?",
+            "Any final requirements or deal-breakers I should consider?",
+        )
+
+        for turn, message in enumerate(expected_messages, start=1):
+            decision = decide_high_information_ask({"turn": turn}, [])
+            self.assertEqual(decision, {"ask_attribute": "other", "message": message})
+
+    def test_high_information_dialogue_returns_to_3b_and_stops_on_turn_ten(self) -> None:
+        self.assertEqual(
+            decide_high_information_ask({"turn": 4}, []),
+            decide_ask({"turn": 4}, []),
+        )
+        self.assertEqual(
+            decide_high_information_ask({"turn": 10}, []),
+            {"ask_attribute": None, "message": ""},
+        )
+
     def test_accumulates_and_overrides_category_without_losing_budget(self) -> None:
         state = create_state("session")
 
@@ -95,6 +116,17 @@ class ConversationStateTest(unittest.TestCase):
         update_state(state, "Something for winter.", asked_attribute="use_case")
 
         self.assertEqual(state.hard_constraint[AttributeName.USE_CASE].values, ["winter"])
+
+    def test_dimension_is_not_misread_as_budget(self) -> None:
+        state = create_state("session")
+
+        update_state(
+            state,
+            "Gold-tone expansion band fits up to 8-inch wrist circumference.",
+            asked_attribute="other",
+        )
+
+        self.assertNotIn(AttributeName.BUDGET, state.hard_constraint)
 
     def test_no_preference_rejects_and_removes_slot(self) -> None:
         state = create_state("session")
