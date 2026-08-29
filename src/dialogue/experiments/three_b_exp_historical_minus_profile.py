@@ -1,3 +1,28 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Leave-one-out: Profile Boost is removed from the historical composite.
+#
+# Variables changed:
+#   Historical Base Priority.
+#   Historical +8/+5 Turn Boost.
+#   Diversity coefficient 38.
+#   Ordinary coverage with rank-weighted entropy.
+#   Historical cardinality factor min(1, 5/K).
+#
+# Variables intentionally kept unchanged:
+#   Every other historical composite scoring factor remains enabled.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#
+# Purpose:
+#   Historical-composite leave-one-out ablation.
+#   Hypothesis: removing Profile Boost reveals its contribution inside the full policy.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -44,18 +69,6 @@ BASE_PRIORITY = {
 
 # 动态 Question Value 的最大增量；不包含任何 Public Set 派生的固定先验。
 DIVERSITY_COEFFICIENT = 38.0
-
-# Historical profile policy recovered from git commit b959324.
-# Each recognized tag adds 12 points; tags mapping to one attribute accumulate.
-PROFILE_TAG_TO_ATTRIBUTE = {
-    "material": "material", "fabric": "material",
-    "fit": "size", "size": "size",
-    "style": "style", "fashion": "style",
-    "comfort": "feature", "durability": "feature", "warmth": "feature",
-    "weather": "use_case", "occasion": "use_case",
-    "price": "budget", "value": "budget",
-    "brand": "brand", "color": "color", "colour": "color",
-}
 
 # Retrieval candidate 不一定有结构化属性；正则用于从标题、详情等文本中兜底提取。
 VALUE_PATTERNS = {
@@ -394,20 +407,6 @@ def _question_value(answerability: float, ranking_impact: float) -> float:
     return DIVERSITY_COEFFICIENT * answerability * ranking_impact
 
 
-def _profile_boosts(shopping_state: ShoppingStateInput) -> Counter[str]:
-    """Restore the historical cumulative +12 profile-tag scoring boost."""
-    profile = _state_value(shopping_state, "user_profile")
-    tags = profile.get("preference_tags", []) if isinstance(profile, Mapping) else []
-    boosts: Counter[str] = Counter()
-    if not isinstance(tags, Sequence) or isinstance(tags, (str, bytes)):
-        return boosts
-    for tag in tags:
-        attribute = PROFILE_TAG_TO_ATTRIBUTE.get(str(tag).lower())
-        if attribute:
-            boosts[attribute] += 12.0
-    return boosts
-
-
 def _turn_number(shopping_state: ShoppingStateInput) -> int:
     """安全读取轮次；非法值回退到第一轮，不让 3B 中断整个会话。"""
     raw_turn = _state_value(shopping_state, "turn", 1)
@@ -433,7 +432,6 @@ def choose_ask_attribute(
         | _unavailable_attributes(shopping_state)
     )
     items = _retrieval_items(candidates_100)
-    profile_boosts = _profile_boosts(shopping_state)
 
     # 类别是基础约束：模块 2 尚未确认类别时，先不比较更细的商品属性。
     if "category" not in excluded:
@@ -445,7 +443,7 @@ def choose_ask_attribute(
         if attribute in excluded:
             continue
         question_value, options = _candidate_diversity_signal(items, attribute)
-        score = BASE_PRIORITY[attribute] + profile_boosts[attribute] + question_value
+        score = BASE_PRIORITY[attribute] + question_value
         # Historical turn policy recovered from git commit b959324.
         if turn <= 2 and attribute in ("category", "use_case"):
             score += 8.0
@@ -533,3 +531,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

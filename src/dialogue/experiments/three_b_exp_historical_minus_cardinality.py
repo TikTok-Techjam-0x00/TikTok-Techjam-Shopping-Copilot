@@ -1,3 +1,28 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Leave-one-out: cardinality factor min(1, 5/K) is removed from the historical composite.
+#
+# Variables changed:
+#   Historical Base Priority.
+#   Historical cumulative +12 Profile Boost.
+#   Historical +8/+5 Turn Boost.
+#   Diversity coefficient 38.
+#   Ordinary coverage with rank-weighted entropy.
+#
+# Variables intentionally kept unchanged:
+#   Every other historical composite scoring factor remains enabled.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#
+# Purpose:
+#   Historical-composite leave-one-out ablation.
+#   Hypothesis: removing 5/K reveals its contribution inside the full policy.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -382,9 +407,8 @@ def _candidate_diversity_signal(
     entropy = -sum((count / total) * math.log(count / total) for count in weighted_counts.values())
     normalized_entropy = entropy / math.log(len(weighted_counts))
     answerability = covered / len(items)
-    # Historical 5/K penalty recovered from git commit b959324.
-    cardinality_factor = min(1.0, 5.0 / len(weighted_counts))
-    boost = _question_value(answerability, normalized_entropy) * cardinality_factor
+    # This leave-one-out removes the historical cardinality penalty.
+    boost = _question_value(answerability, normalized_entropy)
     options = [value for value, _ in weighted_counts.most_common(3)]
     return boost, options
 
@@ -533,3 +557,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

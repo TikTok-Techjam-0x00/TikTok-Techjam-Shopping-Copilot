@@ -1,3 +1,24 @@
+# 3B EXPERIMENT VARIANT
+# Baseline: current production src/dialogue/three_b.py at e788c3b.
+# Differences from current baseline:
+#   Adds scenario/policy routing, Ranking Impact, Expected Answer Yield,
+#   buying-mode conditional candidate analysis, boundary/override recovery,
+#   override asked_attributes epoch reset, and normalized Semantic Prior.
+# Variables changed:
+#   The complete clarification scoring policy is replaced as one composite experiment.
+# Variables intentionally kept unchanged:
+#   Official attributes/aliases, State and Candidate compatibility, attribute extraction,
+#   Module 1 Top100 input, category gate, question templates, public return schema,
+#   turn-10 stop rule, and caller-owned state recording.
+# Purpose:
+#   Standalone A/B benchmark of a scenario-adaptive 3B policy.
+# Runtime inputs only:
+#   Uses only Module 2 State and Module 1 Retrieval candidates; no evaluator labels,
+#   public-set statistics, session IDs, target products, or fixed benchmark answers.
+# Production safety:
+#   This file does not modify production three_b.py and can be copied over it for an
+#   orchestrator experiment without depending on another experimental module.
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -19,8 +40,7 @@ if TYPE_CHECKING:
     from ..attribute import AttributeMap, AttributeName
 
 
-# 属性定义与基础优先级。
-# Base 只表达通用语义层级；具体选择主要由本轮 Top100 的动态信号决定。
+# 官方属性集合与兼容别名保持和生产版一致。
 ATTRIBUTES = (
     "category", "use_case", "feature", "size", "material",
     "budget", "style", "color", "brand", "other",
@@ -29,33 +49,34 @@ ATTRIBUTES = (
 # 共享 AttributeName 已与官方 ask_attribute 完全一致；仅兼容旧版 fit 输入。
 ATTRIBUTE_NAME_ALIASES = {"fit": "style"}
 
-BASE_PRIORITY = {
-    "category": 90.0,
-    "use_case": 70.0,
-    "feature": 68.0,
-    "size": 66.0,
-    "material": 64.0,
-    "budget": 60.0,
-    "style": 58.0,
-    "color": 52.0,
-    "brand": 45.0,
-    "other": 5.0,
+# 四种运行时策略模式。路由只读取 Module 2 本轮 State，不使用测试集先验。
+PolicyMode = Literal["EXPLORE", "CONSTRAIN", "BOUNDARY_RECOVER", "OVERRIDE_RECOVER"]
+
+# 语义先验统一归一化到 0～1，仅作为弱信号参与评分。
+SEMANTIC_PRIOR = {
+    "category": 1.00,
+    "material": 0.95,
+    "color": 0.95,
+    "size": 0.90,
+    "budget": 0.90,
+    "use_case": 0.85,
+    "style": 0.80,
+    "feature": 0.70,
+    "brand": 0.55,
+    "other": 0.10,
 }
 
-# 动态 Question Value 的最大增量；不包含任何 Public Set 派生的固定先验。
-DIVERSITY_COEFFICIENT = 38.0
+# Buying 条件池过小时回退 Top100，避免少量或缺失字段制造虚假的确定性。
+MIN_CONDITIONAL_ITEMS = 12
+MIN_CONDITIONAL_RATIO = 0.20
+CONDITIONAL_ATTRIBUTES = (
+    "material", "color", "size", "use_case", "style", "brand",
+)
 
-# Historical profile policy recovered from git commit b959324.
-# Each recognized tag adds 12 points; tags mapping to one attribute accumulate.
-PROFILE_TAG_TO_ATTRIBUTE = {
-    "material": "material", "fabric": "material",
-    "fit": "size", "size": "size",
-    "style": "style", "fashion": "style",
-    "comfort": "feature", "durability": "feature", "warmth": "feature",
-    "weather": "use_case", "occasion": "use_case",
-    "price": "budget", "value": "budget",
-    "brand": "brand", "color": "color", "colour": "color",
-}
+# 选项需要具备最低重复性与集中度，避免向用户展示大量一次性噪声值。
+MIN_OPTION_REPEATABILITY = 0.20
+MIN_OPTION_CONCENTRATION = 0.50
+UTILITY_TIE_TOLERANCE = 1e-9
 
 # Retrieval candidate 不一定有结构化属性；正则用于从标题、详情等文本中兜底提取。
 VALUE_PATTERNS = {
@@ -113,6 +134,8 @@ class ShoppingStateProtocol(Protocol):
     soft_constraint: AttributeMap
     no_prefernce: Sequence[AttributeName]
     asked_attributes: Any
+    override_detected: bool
+    boundary_detected: bool
 
 
 ShoppingStateInput: TypeAlias = ShoppingStateProtocol | Mapping[str, Any]
@@ -347,65 +370,289 @@ def _values(product: Mapping[str, Any], attribute: str) -> set[str]:
     return set()
 
 
-def _candidate_diversity_signal(
-    items: list[Candidate | Mapping[str, Any]], attribute: str
-) -> tuple[float, list[str]]:
-    """根据当前 Top100 动态估计 Answerability × Ranking Impact。"""
-    if len(items) < 2:
-        return 0.0, []
+class AttributeSignals(TypedDict):
+    """一个属性在当前候选池中的全部归一化运行时信号。"""
 
-    # 排名靠前的商品权重更高，避免排名靠后的候选过度影响提问方向。
+    coverage: float
+    gini_top20: float
+    gini_top100: float
+    repeatability: float
+    option_concentration: float
+    answer_yield: float
+    semantic_prior: float
+    options: list[str]
+
+
+def _rank_weighted_distribution(
+    items: Sequence[Candidate | Mapping[str, Any]],
+    attribute: str,
+    limit: int,
+) -> tuple[Counter[str], Counter[str], float, float]:
+    """统计属性值的排名加权分布及候选级出现次数。
+
+    每个候选的权重是 1/sqrt(rank)。一个候选含有多个值时均分该候选权重，
+    避免多值商品天然比单值商品贡献更多质量。
+    """
     weighted_counts: Counter[str] = Counter()
-    covered = 0
+    candidate_occurrences: Counter[str] = Counter()
     covered_rank_weight = 0.0
     total_rank_weight = 0.0
-    for rank, candidate in enumerate(items, start=1):
-        weight = 1.0 / math.sqrt(rank)
-        total_rank_weight += weight
+
+    for rank, candidate in enumerate(items[:limit], start=1):
+        rank_weight = 1.0 / math.sqrt(rank)
+        total_rank_weight += rank_weight
         product = _product(candidate)
         if product is None:
             continue
-        values = _values(product, attribute)
+        values = sorted(_values(product, attribute))
         if not values:
             continue
-        covered += 1
-        covered_rank_weight += weight
+
+        covered_rank_weight += rank_weight
+        value_weight = rank_weight / len(values)
         for value in values:
-            weighted_counts[value] += weight / len(values)
+            weighted_counts[value] += value_weight
+            candidate_occurrences[value] += 1
 
-    if covered < 2 or len(weighted_counts) < 2:
-        return 0.0, [value for value, _ in weighted_counts.most_common(3)]
+    return (
+        weighted_counts,
+        candidate_occurrences,
+        covered_rank_weight,
+        total_rank_weight,
+    )
 
-    # 本实验仅将 Answerability 改为普通候选覆盖率；熵仍使用排名权重。
-    # 两者只读取本轮候选，不使用 public ground truth 或固定测试集分布。
+
+def _gini_impurity(weighted_counts: Mapping[str, float]) -> float:
+    """用 Gini impurity 表示一个属性区分当前候选的能力。"""
     total = sum(weighted_counts.values())
-    entropy = -sum((count / total) * math.log(count / total) for count in weighted_counts.values())
-    normalized_entropy = entropy / math.log(len(weighted_counts))
-    answerability = covered / len(items)
-    # Historical 5/K penalty recovered from git commit b959324.
-    cardinality_factor = min(1.0, 5.0 / len(weighted_counts))
-    boost = _question_value(answerability, normalized_entropy) * cardinality_factor
-    options = [value for value, _ in weighted_counts.most_common(3)]
-    return boost, options
+    if total <= 0.0 or len(weighted_counts) < 2:
+        return 0.0
+    return 1.0 - sum((weight / total) ** 2 for weight in weighted_counts.values())
 
 
-def _question_value(answerability: float, ranking_impact: float) -> float:
-    """组合运行时可观察的属性覆盖率和候选区分度。"""
-    return DIVERSITY_COEFFICIENT * answerability * ranking_impact
+def _attribute_signals(
+    items: Sequence[Candidate | Mapping[str, Any]],
+    attribute: str,
+) -> AttributeSignals:
+    """计算 coverage、Ranking Impact 与 Expected Answer Yield。
+
+    所有数值都来自本轮 Retrieval，范围保持在 0～1，便于不同信号直接组合。
+    """
+    top20_counts, _, _, _ = _rank_weighted_distribution(items, attribute, 20)
+    (
+        top100_counts,
+        candidate_occurrences,
+        covered_rank_weight,
+        total_rank_weight,
+    ) = _rank_weighted_distribution(items, attribute, 100)
+
+    total_value_mass = sum(top100_counts.values())
+    coverage = (
+        covered_rank_weight / total_rank_weight
+        if total_rank_weight > 0.0
+        else 0.0
+    )
+    repeated_mass = sum(
+        mass
+        for value, mass in top100_counts.items()
+        if candidate_occurrences[value] >= 2
+    )
+    repeatability = (
+        repeated_mass / total_value_mass
+        if total_value_mass > 0.0
+        else 0.0
+    )
+    ranked_values = sorted(
+        top100_counts.items(),
+        key=lambda entry: (-entry[1], entry[0]),
+    )
+    option_concentration = (
+        sum(mass for _, mass in ranked_values[:3]) / total_value_mass
+        if total_value_mass > 0.0
+        else 0.0
+    )
+    answer_yield = coverage * repeatability * option_concentration
+
+    # 只在候选值可重复、且前三个选项覆盖足够质量时向用户展示选项。
+    options = (
+        [value for value, _ in ranked_values[:3]]
+        if (
+            repeatability >= MIN_OPTION_REPEATABILITY
+            and option_concentration >= MIN_OPTION_CONCENTRATION
+        )
+        else []
+    )
+    return {
+        "coverage": coverage,
+        "gini_top20": _gini_impurity(top20_counts),
+        "gini_top100": _gini_impurity(top100_counts),
+        "repeatability": repeatability,
+        "option_concentration": option_concentration,
+        "answer_yield": answer_yield,
+        "semantic_prior": SEMANTIC_PRIOR[attribute],
+        "options": options,
+    }
 
 
-def _profile_boosts(shopping_state: ShoppingStateInput) -> Counter[str]:
-    """Restore the historical cumulative +12 profile-tag scoring boost."""
-    profile = _state_value(shopping_state, "user_profile")
-    tags = profile.get("preference_tags", []) if isinstance(profile, Mapping) else []
-    boosts: Counter[str] = Counter()
-    if not isinstance(tags, Sequence) or isinstance(tags, (str, bytes)):
-        return boosts
-    for tag in tags:
-        attribute = PROFILE_TAG_TO_ATTRIBUTE.get(str(tag).lower())
-        if attribute:
-            boosts[attribute] += 12.0
-    return boosts
+def _policy_mode(shopping_state: ShoppingStateInput) -> PolicyMode:
+    """按 override、boundary、buying、默认的顺序选择本轮策略。"""
+    if bool(_state_value(shopping_state, "override_detected", False)):
+        return "OVERRIDE_RECOVER"
+    if bool(_state_value(shopping_state, "boundary_detected", False)):
+        return "BOUNDARY_RECOVER"
+    if str(_state_value(shopping_state, "intent", "browsing")).lower() == "buying":
+        return "CONSTRAIN"
+    return "EXPLORE"
+
+
+def _constraint_text_values(value: object) -> set[str]:
+    """保守读取 hard_constraint 的离散文本值；数值区间等复杂结构不参与过滤。"""
+    raw_values = getattr(value, "values", None)
+    if raw_values is None and isinstance(value, Mapping):
+        raw_values = value.get("values", value.get("value"))
+    if raw_values is None:
+        raw_values = value
+
+    if isinstance(raw_values, str):
+        candidates: Sequence[object] = [raw_values]
+    elif isinstance(raw_values, Sequence):
+        candidates = raw_values
+    else:
+        return set()
+
+    return {
+        re.sub(r"\s+", " ", str(entry)).strip().lower()[:60]
+        for entry in candidates
+        if isinstance(entry, (str, int, float)) and str(entry).strip()
+    }
+
+
+def _hard_constraint_values(
+    shopping_state: ShoppingStateInput,
+    attribute: str,
+) -> set[str]:
+    """读取指定 hard constraint 的低歧义文本值。"""
+    constraints = _state_value(shopping_state, "hard_constraint")
+    if not isinstance(constraints, Mapping):
+        return set()
+    for raw_name, value in constraints.items():
+        if _attribute_name(raw_name) == attribute:
+            return _constraint_text_values(value)
+    return set()
+
+
+def _values_match(candidate_values: set[str], wanted_values: set[str]) -> bool:
+    """宽松判断两个离散值集合是否相容，避免因轻微文本差异误删候选。"""
+    for candidate_value in candidate_values:
+        for wanted_value in wanted_values:
+            if (
+                candidate_value == wanted_value
+                or candidate_value in wanted_value
+                or wanted_value in candidate_value
+            ):
+                return True
+    return False
+
+
+def _conditional_items_for_buying(
+    shopping_state: ShoppingStateInput,
+    items: list[Candidate | Mapping[str, Any]],
+) -> list[Candidate | Mapping[str, Any]]:
+    """用低歧义 hard constraints 构建安全的 buying 条件候选池。
+
+    候选缺少某个属性时保留；只有双方都有明确值且显式冲突时才排除。
+    条件池过小则回退原始 Top100，避免缺字段或稀疏数据导致不稳定选择。
+    """
+    active_constraints = {
+        attribute: values
+        for attribute in CONDITIONAL_ATTRIBUTES
+        if (values := _hard_constraint_values(shopping_state, attribute))
+    }
+    if not active_constraints or not items:
+        return items
+
+    filtered: list[Candidate | Mapping[str, Any]] = []
+    for candidate in items:
+        product = _product(candidate)
+        if product is None:
+            filtered.append(candidate)
+            continue
+
+        explicit_mismatch = False
+        for attribute, wanted_values in active_constraints.items():
+            candidate_values = _values(product, attribute)
+            if candidate_values and not _values_match(candidate_values, wanted_values):
+                explicit_mismatch = True
+                break
+        if not explicit_mismatch:
+            filtered.append(candidate)
+
+    required_by_ratio = math.ceil(len(items) * MIN_CONDITIONAL_RATIO)
+    if (
+        len(filtered) < MIN_CONDITIONAL_ITEMS
+        or len(filtered) < required_by_ratio
+    ):
+        return items
+    return filtered
+
+
+def _ranking_impact(
+    mode: PolicyMode,
+    turn: int,
+    signals: AttributeSignals,
+) -> float:
+    """让不同场景关注不同深度的候选分布。"""
+    if mode == "EXPLORE":
+        if turn <= 2:
+            top20_weight, top100_weight = 0.45, 0.55
+        elif turn <= 5:
+            top20_weight, top100_weight = 0.65, 0.35
+        else:
+            top20_weight, top100_weight = 0.85, 0.15
+    elif mode == "CONSTRAIN":
+        top20_weight, top100_weight = 0.75, 0.25
+    elif mode == "BOUNDARY_RECOVER":
+        top20_weight, top100_weight = 0.65, 0.35
+    else:
+        top20_weight, top100_weight = 0.70, 0.30
+    return (
+        top20_weight * signals["gini_top20"]
+        + top100_weight * signals["gini_top100"]
+    )
+
+
+def _attribute_utility(
+    mode: PolicyMode,
+    turn: int,
+    signals: AttributeSignals,
+    reask_bonus: float,
+) -> float:
+    """按场景组合归一化信号，返回可直接比较的属性效用。"""
+    impact = _ranking_impact(mode, turn, signals)
+    if mode == "EXPLORE":
+        return (
+            0.45 * impact
+            + 0.35 * signals["answer_yield"]
+            + 0.20 * signals["semantic_prior"]
+        )
+    if mode == "CONSTRAIN":
+        return (
+            0.50 * impact
+            + 0.35 * signals["answer_yield"]
+            + 0.15 * signals["semantic_prior"]
+        )
+    if mode == "BOUNDARY_RECOVER":
+        return (
+            0.35 * impact
+            + 0.50 * signals["answer_yield"]
+            + 0.15 * signals["semantic_prior"]
+        )
+    return (
+        0.40 * impact
+        + 0.35 * signals["answer_yield"]
+        + 0.15 * signals["semantic_prior"]
+        + 0.10 * reask_bonus
+    )
 
 
 def _turn_number(shopping_state: ShoppingStateInput) -> int:
@@ -422,41 +669,70 @@ def choose_ask_attribute(
     shopping_state: ShoppingStateInput,
     candidates_100: Sequence[Candidate | Mapping[str, Any]],
 ) -> tuple[str | None, list[str]]:
-    """综合 State 覆盖情况与候选多样性，选择一个尚未问过的属性。"""
+    """按场景路由，在未耗尽的官方属性中选择下一项 clarification。"""
     turn = _turn_number(shopping_state)
     if turn >= 10:
         return None, []
 
-    excluded = (
-        _known_attributes(shopping_state)
-        | _asked_attributes(shopping_state)
-        | _unavailable_attributes(shopping_state)
-    )
+    mode = _policy_mode(shopping_state)
+    known = _known_attributes(shopping_state)
+    previously_asked = _asked_attributes(shopping_state)
+    unavailable = _unavailable_attributes(shopping_state)
+
+    # Override 代表新需求阶段：旧 asked 属性可重新竞争，但已知和明确不关心的
+    # 属性仍然不能询问。其他模式继续保持生产版的防重复规则。
+    excluded = known | unavailable
+    if mode != "OVERRIDE_RECOVER":
+        excluded |= previously_asked
+
     items = _retrieval_items(candidates_100)
-    profile_boosts = _profile_boosts(shopping_state)
 
-    # 类别是基础约束：模块 2 尚未确认类别时，先不比较更细的商品属性。
+    # Category 仍是硬规则，不与任何评分信号竞争。
     if "category" not in excluded:
-        _, options = _candidate_diversity_signal(items, "category")
-        return "category", options
+        return "category", _attribute_signals(items, "category")["options"]
 
-    scored: list[tuple[float, int, str, list[str]]] = []
-    for order, attribute in enumerate(ATTRIBUTES):
-        if attribute in excluded:
-            continue
-        question_value, options = _candidate_diversity_signal(items, attribute)
-        score = BASE_PRIORITY[attribute] + profile_boosts[attribute] + question_value
-        # Historical turn policy recovered from git commit b959324.
-        if turn <= 2 and attribute in ("category", "use_case"):
-            score += 8.0
-        if turn >= 4 and attribute in ("feature", "size", "material", "budget"):
-            score += 5.0
-        scored.append((score, -order, attribute, options))
-
-    if not scored:
+    # other 只在所有常规属性都耗尽时兜底，不参加常规分数竞争。
+    eligible = [
+        attribute
+        for attribute in ATTRIBUTES
+        if attribute not in {"category", "other"} and attribute not in excluded
+    ]
+    if not eligible:
+        if "other" not in excluded:
+            return "other", []
         return None, []
-    _, _, attribute, options = max(scored)
-    return attribute, options
+
+    scoring_items = (
+        _conditional_items_for_buying(shopping_state, items)
+        if mode == "CONSTRAIN"
+        else items
+    )
+
+    best_score = -1.0
+    best_attribute: str | None = None
+    best_options: list[str] = []
+    for attribute in ATTRIBUTES:
+        if attribute not in eligible:
+            continue
+        signals = _attribute_signals(scoring_items, attribute)
+        reask_bonus = (
+            1.0
+            if (
+                mode == "OVERRIDE_RECOVER"
+                and attribute in previously_asked
+                and attribute not in known
+                and attribute not in unavailable
+            )
+            else 0.0
+        )
+        utility = _attribute_utility(mode, turn, signals, reask_bonus)
+        # 只在明确高于当前最佳值时替换；同分或极近分保留 ATTRIBUTES 中较早者。
+        if utility > best_score + UTILITY_TIE_TOLERANCE:
+            best_score = utility
+            best_attribute = attribute
+            best_options = signals["options"]
+
+    return best_attribute, best_options
 
 
 def build_question(attribute: str | None, options: Sequence[str] = ()) -> str:
@@ -504,15 +780,20 @@ def decide_ask(
 def record_asked_attribute(
     shopping_state: ShoppingStateInput, attribute: str | None
 ) -> None:
-    """供调用方显式把本轮提问写回模块 2 的可变 State。
+    """把本轮提问写回 Module 2 State，并在 override 时开启新的提问 epoch。
 
-    ``decide_ask`` 保持无状态和只读；主流程得到决策后应调用本函数，
-    否则下一轮 3B 无法知道该属性已经问过。
+    decide_ask 保持无状态和只读。override_detected 为真时，旧需求阶段的
+    asked_attributes 会先清空，再只记录新阶段的本轮属性。
     """
     if attribute is None or attribute not in ATTRIBUTES:
         return
-    asked = _asked_attributes(shopping_state)
+
+    if bool(_state_value(shopping_state, "override_detected", False)):
+        asked: set[str] = set()
+    else:
+        asked = _asked_attributes(shopping_state)
     asked.add(attribute)
+
     # 统一写回列表，便于 JSON 序列化和模块之间传递。
     updated = sorted(asked, key=ATTRIBUTES.index)
     if isinstance(shopping_state, MutableMapping):

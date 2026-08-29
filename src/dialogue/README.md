@@ -4,8 +4,10 @@
 100 个 `Candidate`，判断是否需要继续 clarification、选择 `ask_attribute`，并用
 确定性模板生成面向用户的 `message`。
 
-3B 不修改商品顺序，也不依赖 3A 的具体排序公式。当前 clarification policy 是
-可运行的启发式基线，后续可以优化属性价值估计而不改变模块输入输出边界。
+3B 不修改商品顺序，也不依赖 3A 的具体排序公式。当前生产策略采用完整的
+Historical Composite：历史 Base、Profile/Turn boost、38 分动态系数、普通
+coverage 和 `5/K` cardinality factor。原工作版保存在 experiments 的 baseline
+副本中，可继续做 A/B 比较。
 
 ## 1. 数据流
 
@@ -91,7 +93,7 @@ State 由 Module 2 创建和维护。3B 同时支持对象属性和普通 Mappin
 | 字段 | 含义 | 3B 用途 |
 | --- | --- | --- |
 | `session_id` | 当前会话 ID | 共享契约，不参与当前评分 |
-| `user_profile` | 匿名聚合画像 | 保留共享契约；当前不参与 3B attribute scoring |
+| `user_profile` | 匿名聚合画像 | 已识别 preference tag 提供累计 Profile Boost |
 | `user_message` | 当前用户消息 | Module 2 应先解析为约束 |
 | `turn` | 当前轮次 1～10 | 第 10 轮停止继续追问 |
 | `intent` | `buying` 或 `browsing` | 共享契约，当前 3B 不直接使用 |
@@ -207,7 +209,7 @@ excluded
 ```
 
 如果 category 尚未出现，3B 优先确认 category。其他属性再根据 Base Priority、
-动态 Answerability 和 Ranking Impact 评分。
+Profile Boost、Turn Boost、动态 Answerability 和 Ranking Impact 评分。
 
 ### 5.2 商品属性提取
 
@@ -250,38 +252,42 @@ Brand 优先级为：
 
 对每个尚未排除的属性，当前策略计算：
 
-- Base Priority：只提供稳定的通用语义层级，不使用测试集属性分布。
+- Base Priority：Historical Composite 的稳定通用语义层级。
 - rank weighting：`1 / sqrt(rank)`，排名靠前的 Candidate 权重更高。
-- Answerability：当前 Top100 中具有该属性值的排名加权覆盖率。
+- Answerability：当前 Top100 中具有该属性值的普通候选覆盖率。
 - Ranking Impact：候选值分布的 normalized entropy。
+- Cardinality factor：候选值过度碎片化时使用 `min(1, 5/K)` 降权。
+- Profile Boost：每个可识别的 preference tag 为对应属性累计增加 12 分。
+- Turn Boost：前两轮 category/use_case 增加 8 分；第 4 轮起
+  feature/size/material/budget 增加 5 分。
 
 Base Priority 使用少量语义分层：
 
 ```text
 category=90
-feature=65, material=65
-use_case=60, size=60, style=60, color=60
-budget=55, brand=35, other=5
+use_case=70, feature=68, size=66, material=64
+budget=60, style=58, color=52, brand=45, other=5
 ```
 
 最终评分公式为：
 
 ```text
 rank_weight(r) = 1 / sqrt(r)
-answerability = sum(rank_weight of covered candidates) / sum(all rank_weight)
+answerability = covered_candidate_count / candidate_count
 ranking_impact = normalized_entropy
-question_value = 18 × answerability × ranking_impact
-score = base_priority + question_value
+cardinality_factor = min(1, 5 / distinct_value_count)
+question_value = 38 × answerability × ranking_impact × cardinality_factor
+score = base_priority + profile_boost + turn_boost + question_value
 ```
 
 Answerability 和 Ranking Impact 都只从本轮 Module 1 candidates 计算，不读取
-public ground truth、scenario label 或固定测试集统计。排名靠前的候选具有更大权重；
-单个商品有多个值时，其权重仍平均分给这些值。
+public ground truth、scenario label 或固定测试集统计。排名权重用于候选值分布和
+entropy；普通 coverage 不受候选所在 rank 影响。单个商品有多个值时，其权重仍
+平均分给这些值。
 
-normalized entropy 已把不同候选值数量归一化到 `0～1`，因此不同 cardinality
-不会被额外奖励或惩罚。系数 `18` 是动态 Question Value 的上限。`user_profile`
-仍保留在 State 接口中，但不参与 3B 评分，避免与已经使用 Profile 的 3A 排名
-重复计算。
+normalized entropy 把候选值分布归一化到 `0～1`；额外的 `5/K` 防止大量一次性
+长尾值获得过高分。系数 `38` 是应用 cardinality factor 之前的动态 Question
+Value 上限。Profile 与 Turn 都只调整属性提问优先级，不修改商品排序。
 
 Ranking Impact 仍是候选多样性启发式，不是模拟用户回答并重新 Retrieval 后的
 严格排名增益。
@@ -381,10 +387,9 @@ python -m unittest src.dialogue.test_three_b -v
 - use_case 仅使用 features/details 和六个官方关键词。
 - Fabric/Fit/Width 和 feature 排他分类与官方属性边界一致。
 - 空候选、缺少所有分数字段和 turn >= 10。
-- 语义分层 Base Priority、动态 Answerability、18 分 Question Value 上限。
-- 排名靠前的属性覆盖对 Answerability 影响更大。
-- normalized entropy、coverage、不同 cardinality 等权和问题模板行为。
-- 不同 `user_profile` 不会改变 3B 的评分与选择结果。
+- Historical Base Priority、动态 Answerability 和 38 分 Question Value 系数。
+- 普通 coverage、排名加权 entropy 与 `5/K` cardinality factor。
+- Profile tag 累计 boost、前期/后期 Turn Boost 和问题模板行为。
 
 ## 9. 接口摘要
 

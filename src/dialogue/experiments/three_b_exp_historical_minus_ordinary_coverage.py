@@ -1,3 +1,28 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Leave-one-out: ordinary coverage (restored to rank-weighted coverage) is removed from the historical composite.
+#
+# Variables changed:
+#   Historical Base Priority.
+#   Historical cumulative +12 Profile Boost.
+#   Historical +8/+5 Turn Boost.
+#   Diversity coefficient 38.
+#   Historical cardinality factor min(1, 5/K).
+#
+# Variables intentionally kept unchanged:
+#   Every other historical composite scoring factor remains enabled.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#
+# Purpose:
+#   Historical-composite leave-one-out ablation.
+#   Hypothesis: removing ordinary coverage reveals whether rank weighting improves the full policy.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -376,12 +401,12 @@ def _candidate_diversity_signal(
     if covered < 2 or len(weighted_counts) < 2:
         return 0.0, [value for value, _ in weighted_counts.most_common(3)]
 
-    # 本实验仅将 Answerability 改为普通候选覆盖率；熵仍使用排名权重。
+    # Answerability 是排名加权覆盖率；Ranking Impact 是归一化熵。
     # 两者只读取本轮候选，不使用 public ground truth 或固定测试集分布。
     total = sum(weighted_counts.values())
     entropy = -sum((count / total) * math.log(count / total) for count in weighted_counts.values())
     normalized_entropy = entropy / math.log(len(weighted_counts))
-    answerability = covered / len(items)
+    answerability = covered_rank_weight / total_rank_weight
     # Historical 5/K penalty recovered from git commit b959324.
     cardinality_factor = min(1.0, 5.0 / len(weighted_counts))
     boost = _question_value(answerability, normalized_entropy) * cardinality_factor
@@ -533,3 +558,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

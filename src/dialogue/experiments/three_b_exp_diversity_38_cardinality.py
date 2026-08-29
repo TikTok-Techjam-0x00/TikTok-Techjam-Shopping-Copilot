@@ -1,3 +1,27 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Current production three_b.py; benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Diversity coefficient is 38 and historical cardinality penalty is enabled.
+#
+# Variables changed:
+#   Lambda: 18 -> 38.
+#   Dynamic term is multiplied by min(1, 5/distinct_value_count).
+#
+# Variables intentionally kept unchanged:
+#   Current Base Priority, rank-weighted coverage, and rank-weighted entropy.
+#   Latest interfaces, Top100, rank weight 1/sqrt(rank), and multi-value normalization.
+#   Latest extraction, evaluator-aligned use_case, gates, exclusions, and return schema.
+#   No Profile Boost or Turn Boost.
+#
+# Purpose:
+#   This is a two-variable interaction experiment, not a single-variable ablation.
+#   Hypothesis: lambda=38 and 5/K jointly explain the historical composite gain.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -31,31 +55,19 @@ ATTRIBUTE_NAME_ALIASES = {"fit": "style"}
 
 BASE_PRIORITY = {
     "category": 90.0,
-    "use_case": 70.0,
-    "feature": 68.0,
-    "size": 66.0,
-    "material": 64.0,
-    "budget": 60.0,
-    "style": 58.0,
-    "color": 52.0,
-    "brand": 45.0,
+    "use_case": 60.0,
+    "feature": 65.0,
+    "size": 60.0,
+    "material": 65.0,
+    "budget": 55.0,
+    "style": 60.0,
+    "color": 60.0,
+    "brand": 35.0,
     "other": 5.0,
 }
 
 # 动态 Question Value 的最大增量；不包含任何 Public Set 派生的固定先验。
 DIVERSITY_COEFFICIENT = 38.0
-
-# Historical profile policy recovered from git commit b959324.
-# Each recognized tag adds 12 points; tags mapping to one attribute accumulate.
-PROFILE_TAG_TO_ATTRIBUTE = {
-    "material": "material", "fabric": "material",
-    "fit": "size", "size": "size",
-    "style": "style", "fashion": "style",
-    "comfort": "feature", "durability": "feature", "warmth": "feature",
-    "weather": "use_case", "occasion": "use_case",
-    "price": "budget", "value": "budget",
-    "brand": "brand", "color": "color", "colour": "color",
-}
 
 # Retrieval candidate 不一定有结构化属性；正则用于从标题、详情等文本中兜底提取。
 VALUE_PATTERNS = {
@@ -376,12 +388,12 @@ def _candidate_diversity_signal(
     if covered < 2 or len(weighted_counts) < 2:
         return 0.0, [value for value, _ in weighted_counts.most_common(3)]
 
-    # 本实验仅将 Answerability 改为普通候选覆盖率；熵仍使用排名权重。
+    # Answerability 是排名加权覆盖率；Ranking Impact 是归一化熵。
     # 两者只读取本轮候选，不使用 public ground truth 或固定测试集分布。
     total = sum(weighted_counts.values())
     entropy = -sum((count / total) * math.log(count / total) for count in weighted_counts.values())
     normalized_entropy = entropy / math.log(len(weighted_counts))
-    answerability = covered / len(items)
+    answerability = covered_rank_weight / total_rank_weight
     # Historical 5/K penalty recovered from git commit b959324.
     cardinality_factor = min(1.0, 5.0 / len(weighted_counts))
     boost = _question_value(answerability, normalized_entropy) * cardinality_factor
@@ -392,20 +404,6 @@ def _candidate_diversity_signal(
 def _question_value(answerability: float, ranking_impact: float) -> float:
     """组合运行时可观察的属性覆盖率和候选区分度。"""
     return DIVERSITY_COEFFICIENT * answerability * ranking_impact
-
-
-def _profile_boosts(shopping_state: ShoppingStateInput) -> Counter[str]:
-    """Restore the historical cumulative +12 profile-tag scoring boost."""
-    profile = _state_value(shopping_state, "user_profile")
-    tags = profile.get("preference_tags", []) if isinstance(profile, Mapping) else []
-    boosts: Counter[str] = Counter()
-    if not isinstance(tags, Sequence) or isinstance(tags, (str, bytes)):
-        return boosts
-    for tag in tags:
-        attribute = PROFILE_TAG_TO_ATTRIBUTE.get(str(tag).lower())
-        if attribute:
-            boosts[attribute] += 12.0
-    return boosts
 
 
 def _turn_number(shopping_state: ShoppingStateInput) -> int:
@@ -433,7 +431,6 @@ def choose_ask_attribute(
         | _unavailable_attributes(shopping_state)
     )
     items = _retrieval_items(candidates_100)
-    profile_boosts = _profile_boosts(shopping_state)
 
     # 类别是基础约束：模块 2 尚未确认类别时，先不比较更细的商品属性。
     if "category" not in excluded:
@@ -445,12 +442,7 @@ def choose_ask_attribute(
         if attribute in excluded:
             continue
         question_value, options = _candidate_diversity_signal(items, attribute)
-        score = BASE_PRIORITY[attribute] + profile_boosts[attribute] + question_value
-        # Historical turn policy recovered from git commit b959324.
-        if turn <= 2 and attribute in ("category", "use_case"):
-            score += 8.0
-        if turn >= 4 and attribute in ("feature", "size", "material", "budget"):
-            score += 5.0
+        score = BASE_PRIORITY[attribute] + question_value
         scored.append((score, -order, attribute, options))
 
     if not scored:
@@ -533,3 +525,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

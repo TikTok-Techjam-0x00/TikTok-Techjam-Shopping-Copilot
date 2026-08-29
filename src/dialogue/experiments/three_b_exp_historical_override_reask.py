@@ -1,3 +1,26 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Previously asked attributes are ignored only on the detected override turn.
+#
+# Variables changed:
+#   Override turn: old asked_attributes do not exclude an attribute.
+#   Known and no-preference exclusions remain active.
+#
+# Variables intentionally kept unchanged:
+#   Full historical composite policy outside the detected override turn.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#   Override detection comes only from Module 2 state, never evaluator labels.
+#
+# Purpose:
+#   Override-aware interaction experiment.
+#   Test whether a new intent phase should be allowed to re-ask an old attribute.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -427,11 +450,12 @@ def choose_ask_attribute(
     if turn >= 10:
         return None, []
 
-    excluded = (
-        _known_attributes(shopping_state)
-        | _asked_attributes(shopping_state)
-        | _unavailable_attributes(shopping_state)
-    )
+    known = _known_attributes(shopping_state)
+    asked = _asked_attributes(shopping_state)
+    # Override 开启了新的需求阶段：本轮允许重新选择旧阶段问过的属性。
+    if bool(_state_value(shopping_state, "override_detected", False)):
+        asked.clear()
+    excluded = known | asked | _unavailable_attributes(shopping_state)
     items = _retrieval_items(candidates_100)
     profile_boosts = _profile_boosts(shopping_state)
 
@@ -533,3 +557,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

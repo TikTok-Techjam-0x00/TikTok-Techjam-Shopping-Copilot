@@ -38,19 +38,19 @@ CANDIDATES_100 = [
 
 
 class AskAttributeSelectorTest(unittest.TestCase):
-    def test_base_priority_uses_semantic_tiers(self) -> None:
+    def test_base_priority_uses_promoted_historical_tiers(self) -> None:
         self.assertEqual(
             BASE_PRIORITY,
             {
                 "category": 90.0,
-                "use_case": 60.0,
-                "feature": 65.0,
-                "size": 60.0,
-                "material": 65.0,
-                "budget": 55.0,
-                "style": 60.0,
-                "color": 60.0,
-                "brand": 35.0,
+                "use_case": 70.0,
+                "feature": 68.0,
+                "size": 66.0,
+                "material": 64.0,
+                "budget": 60.0,
+                "style": 58.0,
+                "color": 52.0,
+                "brand": 45.0,
                 "other": 5.0,
             },
         )
@@ -83,8 +83,8 @@ class AskAttributeSelectorTest(unittest.TestCase):
         self.assertEqual(decision["ask_attribute"], "material")
         self.assertIn("leather", decision["message"])
 
-    def test_user_profile_does_not_change_attribute_scoring(self) -> None:
-        # Profile 已由 3A 用于排序；3B 不应再次把同一信号加到 attribute score。
+    def test_profile_tags_apply_cumulative_attribute_boosts(self) -> None:
+        # Historical Composite 会把已识别的画像标签按每个标签 +12 累加。
         shared_state = {
             "turn": 3,
             "hard_constraint": {"category": "shoes"},
@@ -102,10 +102,10 @@ class AskAttributeSelectorTest(unittest.TestCase):
             },
             [],
         )
-        self.assertEqual(without_profile_signal, with_profile_signal)
-        self.assertEqual(with_profile_signal["ask_attribute"], "feature")
+        self.assertEqual(without_profile_signal["ask_attribute"], "use_case")
+        self.assertEqual(with_profile_signal["ask_attribute"], "size")
 
-    def test_diversity_maximum_is_18_for_low_and_high_cardinality(self) -> None:
+    def test_diversity_uses_38_coefficient_and_cardinality_penalty(self) -> None:
         # 每个候选都包含全部值，使 coverage 和 normalized entropy 都精确为 1。
         def candidates_with_all_values(values: list[str]) -> list[Candidate]:
             return [
@@ -121,16 +121,16 @@ class AskAttributeSelectorTest(unittest.TestCase):
             candidates_with_all_values([f"value-{i}" for i in range(20)]),
             "material",
         )
-        self.assertEqual(DIVERSITY_COEFFICIENT, 18.0)
-        self.assertAlmostEqual(two_value_boost, 18.0)
-        self.assertAlmostEqual(twenty_value_boost, 18.0)
+        self.assertEqual(DIVERSITY_COEFFICIENT, 38.0)
+        self.assertAlmostEqual(two_value_boost, 38.0)
+        self.assertAlmostEqual(twenty_value_boost, 9.5)
 
-    def test_question_value_half_answerability_is_9(self) -> None:
-        self.assertAlmostEqual(_question_value(0.5, 1.0), 9.0)
-        self.assertAlmostEqual(_question_value(1.0, 0.5), 9.0)
+    def test_question_value_half_answerability_is_19(self) -> None:
+        self.assertAlmostEqual(_question_value(0.5, 1.0), 19.0)
+        self.assertAlmostEqual(_question_value(1.0, 0.5), 19.0)
         self.assertEqual(_question_value(0.0, 1.0), 0.0)
 
-    def test_higher_ranked_attribute_coverage_has_more_question_value(self) -> None:
+    def test_ordinary_coverage_ignores_covered_candidate_rank(self) -> None:
         covered = [
             _candidate(
                 parent_asin=f"C{i}",
@@ -149,7 +149,7 @@ class AskAttributeSelectorTest(unittest.TestCase):
         bottom_covered_boost, _ = _candidate_diversity_signal(
             [*missing, *covered], "material"
         )
-        self.assertGreater(top_covered_boost, bottom_covered_boost)
+        self.assertAlmostEqual(top_covered_boost, bottom_covered_boost)
 
     def test_nearly_identical_candidate_values_have_near_zero_boost(self) -> None:
         candidates = [
@@ -162,7 +162,7 @@ class AskAttributeSelectorTest(unittest.TestCase):
 
         boost, _ = _candidate_diversity_signal(candidates, "material")
         self.assertGreater(boost, 0.0)
-        self.assertLess(boost, 1.5)
+        self.assertLess(boost, 2.0)
 
     def test_turn_ten_does_not_ask_another_question(self) -> None:
         decision = decide_ask({"turn": 10}, CANDIDATES_100)

@@ -1,3 +1,28 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Leave-one-out: Turn Boost is removed from the historical composite.
+#
+# Variables changed:
+#   Historical Base Priority.
+#   Historical cumulative +12 Profile Boost.
+#   Diversity coefficient 38.
+#   Ordinary coverage with rank-weighted entropy.
+#   Historical cardinality factor min(1, 5/K).
+#
+# Variables intentionally kept unchanged:
+#   Every other historical composite scoring factor remains enabled.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#
+# Purpose:
+#   Historical-composite leave-one-out ablation.
+#   Hypothesis: removing Turn Boost reveals its contribution inside the full policy.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -446,11 +471,6 @@ def choose_ask_attribute(
             continue
         question_value, options = _candidate_diversity_signal(items, attribute)
         score = BASE_PRIORITY[attribute] + profile_boosts[attribute] + question_value
-        # Historical turn policy recovered from git commit b959324.
-        if turn <= 2 and attribute in ("category", "use_case"):
-            score += 8.0
-        if turn >= 4 and attribute in ("feature", "size", "material", "budget"):
-            score += 5.0
         scored.append((score, -order, attribute, options))
 
     if not scored:
@@ -533,3 +553,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

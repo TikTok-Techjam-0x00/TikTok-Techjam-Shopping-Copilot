@@ -1,3 +1,26 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Profile Boost is paused only when shopping_state.override_detected is true.
+#
+# Variables changed:
+#   Override turn: Profile Boost OFF.
+#   All other turns: historical composite unchanged.
+#
+# Variables intentionally kept unchanged:
+#   Full historical composite policy outside the detected override turn.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#   Override detection comes only from Module 2 state, never evaluator labels.
+#
+# Purpose:
+#   Override-aware interaction experiment.
+#   Test whether explicit revised intent should temporarily outrank long-term profile tags.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -434,6 +457,9 @@ def choose_ask_attribute(
     )
     items = _retrieval_items(candidates_100)
     profile_boosts = _profile_boosts(shopping_state)
+    # 显式改意图时，当前用户表达优先于长期画像；只在本轮暂停 Profile Boost。
+    if bool(_state_value(shopping_state, "override_detected", False)):
+        profile_boosts.clear()
 
     # 类别是基础约束：模块 2 尚未确认类别时，先不比较更细的商品属性。
     if "category" not in excluded:
@@ -533,3 +559,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

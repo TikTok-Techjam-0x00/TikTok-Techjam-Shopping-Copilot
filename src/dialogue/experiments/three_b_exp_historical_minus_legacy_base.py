@@ -1,3 +1,28 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Leave-one-out: historical Base Priority is removed from the historical composite.
+#
+# Variables changed:
+#   Historical cumulative +12 Profile Boost.
+#   Historical +8/+5 Turn Boost.
+#   Diversity coefficient 38.
+#   Ordinary coverage with rank-weighted entropy.
+#   Historical cardinality factor min(1, 5/K).
+#
+# Variables intentionally kept unchanged:
+#   Every other historical composite scoring factor remains enabled.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#
+# Purpose:
+#   Historical-composite leave-one-out ablation.
+#   Hypothesis: removing legacy Base reveals whether it contributes inside the full policy.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -31,14 +56,14 @@ ATTRIBUTE_NAME_ALIASES = {"fit": "style"}
 
 BASE_PRIORITY = {
     "category": 90.0,
-    "use_case": 70.0,
-    "feature": 68.0,
-    "size": 66.0,
-    "material": 64.0,
-    "budget": 60.0,
-    "style": 58.0,
-    "color": 52.0,
-    "brand": 45.0,
+    "use_case": 60.0,
+    "feature": 65.0,
+    "size": 60.0,
+    "material": 65.0,
+    "budget": 55.0,
+    "style": 60.0,
+    "color": 60.0,
+    "brand": 35.0,
     "other": 5.0,
 }
 
@@ -533,3 +558,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

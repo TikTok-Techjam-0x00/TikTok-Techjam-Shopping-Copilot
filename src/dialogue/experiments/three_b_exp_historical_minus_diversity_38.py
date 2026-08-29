@@ -1,3 +1,28 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Leave-one-out: lambda=38 (restored to 18) is removed from the historical composite.
+#
+# Variables changed:
+#   Historical Base Priority.
+#   Historical cumulative +12 Profile Boost.
+#   Historical +8/+5 Turn Boost.
+#   Ordinary coverage with rank-weighted entropy.
+#   Historical cardinality factor min(1, 5/K).
+#
+# Variables intentionally kept unchanged:
+#   Every other historical composite scoring factor remains enabled.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#
+# Purpose:
+#   Historical-composite leave-one-out ablation.
+#   Hypothesis: removing the stronger coefficient reveals its contribution inside the full policy.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -43,7 +68,7 @@ BASE_PRIORITY = {
 }
 
 # 动态 Question Value 的最大增量；不包含任何 Public Set 派生的固定先验。
-DIVERSITY_COEFFICIENT = 38.0
+DIVERSITY_COEFFICIENT = 18.0
 
 # Historical profile policy recovered from git commit b959324.
 # Each recognized tag adds 12 points; tags mapping to one attribute accumulate.
@@ -533,3 +558,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+

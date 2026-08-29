@@ -1,3 +1,26 @@
+# ============================================================
+# 3B EXPERIMENT VARIANT
+#
+# Baseline:
+#   Historical composite scoring policy on benchmark checkout e788c3b.
+#
+# Differences from current baseline:
+#   Profile Boost is disabled for the whole phase after an explicit override.
+#
+# Variables changed:
+#   Persistent override phase is inferred from Module 2 history for this experiment.
+#   Profile Boost remains off after override; all other composite factors remain on.
+#
+# Variables intentionally kept unchanged:
+#   Full historical composite before override and all non-Profile scoring terms.
+#   Latest interfaces, Top100, extraction, evaluator-aligned use_case, and return schema.
+#   No evaluator scenario labels or target data are read.
+#
+# Purpose:
+#   Validate whether override optimization requires a persistent phase signal.
+#   Production should expose last_override_turn/constraint_epoch from Module 2.
+# ============================================================
+
 """3B: choose the next clarification attribute and render its question.
 
 Module 2 owns ``shopping_state``; module 1 owns ``candidates_100``. 3B only
@@ -44,6 +67,13 @@ BASE_PRIORITY = {
 
 # 动态 Question Value 的最大增量；不包含任何 Public Set 派生的固定先验。
 DIVERSITY_COEFFICIENT = 38.0
+
+# Experimental persistence proxy. Production should receive a durable
+# last_override_turn/constraint_epoch from Module 2 instead of rescanning history.
+OVERRIDE_HISTORY_PATTERN = re.compile(
+    r"\b(?:actually|instead|rather than|change that to)\b",
+    re.I,
+)
 
 # Historical profile policy recovered from git commit b959324.
 # Each recognized tag adds 12 points; tags mapping to one attribute accumulate.
@@ -394,6 +424,16 @@ def _question_value(answerability: float, ranking_impact: float) -> float:
     return DIVERSITY_COEFFICIENT * answerability * ranking_impact
 
 
+def _override_phase_active(shopping_state: ShoppingStateInput) -> bool:
+    """Detect whether the current clarification phase follows an explicit override."""
+    if bool(_state_value(shopping_state, "override_detected", False)):
+        return True
+    history = _state_value(shopping_state, "history", ())
+    if not isinstance(history, Sequence) or isinstance(history, (str, bytes)):
+        return False
+    return any(OVERRIDE_HISTORY_PATTERN.search(str(message)) for message in history)
+
+
 def _profile_boosts(shopping_state: ShoppingStateInput) -> Counter[str]:
     """Restore the historical cumulative +12 profile-tag scoring boost."""
     profile = _state_value(shopping_state, "user_profile")
@@ -434,6 +474,9 @@ def choose_ask_attribute(
     )
     items = _retrieval_items(candidates_100)
     profile_boosts = _profile_boosts(shopping_state)
+    # 新需求阶段内显式意图优先于长期画像。
+    if _override_phase_active(shopping_state):
+        profile_boosts.clear()
 
     # 类别是基础约束：模块 2 尚未确认类别时，先不比较更细的商品属性。
     if "category" not in excluded:
@@ -533,3 +576,4 @@ class AskAttributeSelector:
         candidates_100: Sequence[Candidate | Mapping[str, Any]],
     ) -> AskDecision:
         return decide_ask(shopping_state, candidates_100)
+
