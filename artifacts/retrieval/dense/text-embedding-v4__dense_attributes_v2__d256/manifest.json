@@ -1,0 +1,10 @@
+{
+  "format_version": 1,
+  "model": "text-embedding-v4",
+  "dimension": 256,
+  "text_version": "dense_attributes_v2",
+  "catalog_fingerprint": "78974f5a3f247dfae02d6a6b699ac7bedccac531f9b885040c4ebd7e4ad4efcc",
+  "item_count": 50000,
+  "normalized": true,
+  "created_at_utc": "2026-08-28T19:58:18.922354+00:00"
+}

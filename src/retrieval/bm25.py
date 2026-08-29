@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from ..item import Candidate, Candidates100, Item
 from .catalog import Catalog
 from .query import build_retrieval_query
+from .text import (
+    DEFAULT_TEXT_VERSION,
+    ProductTextConfig,
+    SEARCH_FIELDS,
+    build_bm25_fields,
+    resolve_text_config,
+)
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -21,16 +27,6 @@ STOPWORDS = frozenset(
         "would", "you", "looking",
     }
 )
-
-
-def _text(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, Mapping):
-        return " ".join(f"{key} {_text(entry)}" for key, entry in value.items())
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return " ".join(_text(entry) for entry in value)
-    return str(value)
 
 
 def _terms(text: str, limit: int) -> list[str]:
@@ -49,19 +45,16 @@ class BM25Weights:
     title: float = 6.0
     categories: float = 4.0
     features: float = 2.5
+    attributes: float = 2.5
     details: float = 2.5
     store: float = 1.5
     description: float = 1.0
 
-    def sql_parameters(self) -> tuple[float, ...]:
+    def sql_parameters(self, active_fields: tuple[str, ...]) -> tuple[float, ...]:
+        active = set(active_fields)
         return (
             0.0,
-            self.title,
-            self.categories,
-            self.features,
-            self.details,
-            self.store,
-            self.description,
+            *(getattr(self, field) if field in active else 0.0 for field in SEARCH_FIELDS),
         )
 
 
@@ -79,10 +72,12 @@ class BM25Retriever:
         *,
         weights: BM25Weights | None = None,
         max_query_terms: int = 40,
+        text_version: str | ProductTextConfig = DEFAULT_TEXT_VERSION,
     ) -> None:
         self.catalog = catalog if isinstance(catalog, Catalog) else Catalog.load(catalog)
         self.weights = weights or BM25Weights()
         self.max_query_terms = max(1, int(max_query_terms))
+        self.text_config = resolve_text_config(text_version)
         self.connection = sqlite3.connect(":memory:")
         self._build_index()
 
@@ -90,22 +85,21 @@ class BM25Retriever:
         cursor = self.connection.cursor()
         cursor.execute(
             "CREATE VIRTUAL TABLE products USING fts5("
-            "parent_asin UNINDEXED, title, categories, features, details, store, description, "
+            "parent_asin UNINDEXED, "
+            + ", ".join(SEARCH_FIELDS)
+            + ", "
             "tokenize='unicode61 remove_diacritics 2')"
         )
-        rows = (
-            (
-                product.parent_asin,
-                product.title,
-                _text(product.categories),
-                _text(product.features),
-                _text(product.details),
-                _text(product.store),
-                _text(product.description),
-            )
-            for product in self.catalog.items_in_order
-        )
-        cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+        def rows():
+            for product in self.catalog.items_in_order:
+                fields = build_bm25_fields(product, self.text_config)
+                yield (
+                    product.parent_asin,
+                    *(fields[field] for field in SEARCH_FIELDS),
+                )
+
+        placeholders = ", ".join("?" for _ in range(1 + len(SEARCH_FIELDS)))
+        cursor.executemany(f"INSERT INTO products VALUES ({placeholders})", rows())
         self.connection.commit()
 
     def retrieve(
@@ -126,14 +120,15 @@ class BM25Retriever:
         if not terms:
             return []
         expression = " OR ".join(f'"{term}"' for term in terms)
-        placeholders = ", ".join("?" for _ in self.weights.sql_parameters())
+        weight_parameters = self.weights.sql_parameters(self.text_config.fields)
+        placeholders = ", ".join("?" for _ in weight_parameters)
         sql = (
             "SELECT parent_asin, bm25(products, "
             + placeholders
             + ") AS native_score FROM products WHERE products MATCH ? "
             "ORDER BY native_score ASC, rowid ASC LIMIT ?"
         )
-        parameters = (*self.weights.sql_parameters(), expression, k)
+        parameters = (*weight_parameters, expression, k)
         rows = self.connection.execute(sql, parameters).fetchall()
 
         candidates: Candidates100 = []

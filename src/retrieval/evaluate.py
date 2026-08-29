@@ -38,6 +38,7 @@ from src.item import Candidate
 from src.retrieval.bm25 import BM25Retriever
 from src.retrieval.catalog import Catalog
 from src.retrieval.retriever import RetrievalStrategy
+from src.retrieval.text import DEFAULT_TEXT_VERSION, TEXT_CONFIGS
 
 
 DEFAULT_KS = (10, 50, 100)
@@ -200,6 +201,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ks", type=int, nargs="+", default=list(DEFAULT_KS))
     parser.add_argument("--limit", type=int, default=None, help="Optional smoke-test sample limit.")
     parser.add_argument("--experiment", default="bm25_v0")
+    parser.add_argument(
+        "--text-version",
+        choices=tuple(TEXT_CONFIGS),
+        default=DEFAULT_TEXT_VERSION,
+        help="Versioned product fields used to build the BM25 index.",
+    )
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
         "--include-sessions",
@@ -219,7 +226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     catalog_load_seconds = time.perf_counter() - started
 
     started = time.perf_counter()
-    retriever = BM25Retriever(catalog)
+    retriever = BM25Retriever(catalog, text_version=args.text_version)
     index_build_seconds = time.perf_counter() - started
     try:
         samples = load_jsonl(args.dataset)
@@ -237,6 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     result = {
         "experiment": args.experiment,
+        "text_version": args.text_version,
         "catalog": str(args.catalog),
         "dataset": str(args.dataset),
         "catalog_items": len(catalog),
