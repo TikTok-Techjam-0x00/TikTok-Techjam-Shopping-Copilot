@@ -90,6 +90,99 @@ def _record_epoch(state: object, group: str, attribute: object) -> int | None:
         return None
 
 
+def _constraint_value(state: object, attribute: AttributeName) -> object | None:
+    for group_name in ("hard_constraint", "soft_constraint"):
+        constraints = _state_value(state, group_name, {})
+        if not isinstance(constraints, Mapping):
+            continue
+        value = constraints.get(attribute, constraints.get(attribute.value))
+        if value is not None:
+            return value
+    return None
+
+
+def _number(value: object) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _budget_context(
+    state: object,
+) -> tuple[float | None, float | None, bool] | None:
+    """Return validated bounds only when the conversation is monetary."""
+
+    budget = _constraint_value(state, AttributeName.BUDGET)
+    if budget is None:
+        return None
+    minimum = _number(
+        budget.get("min", budget.get("minimum"))
+        if isinstance(budget, Mapping)
+        else getattr(budget, "minimum", None)
+    )
+    maximum = _number(
+        budget.get("max", budget.get("maximum"))
+        if isinstance(budget, Mapping)
+        else getattr(budget, "maximum", None)
+    )
+    if minimum is None and maximum is None:
+        return None
+
+    history = _flatten(_state_value(state, "history", ()))
+    history.append(str(_state_value(state, "user_message", "")))
+    history_text = " ".join(history)
+    if not re.search(
+        r"(?:[$£€]|\b(?:budget|price|cost|spend)\b)",
+        history_text,
+        re.I,
+    ):
+        # Numeric dimensions such as ``up to 30mm`` can resemble an upper
+        # budget bound to a rule parser. Require explicit monetary context
+        # before price affects ranking.
+        return None
+
+    around = bool(
+        re.search(r"\b(?:around|about|approximately)\b", history_text, re.I)
+    )
+    return minimum, maximum, around
+
+
+def _budget_evidence(
+    context: tuple[float | None, float | None, bool] | None,
+    candidate: Candidate,
+) -> tuple[float, float]:
+    """Return hard budget compliance and optional ``around`` proximity."""
+
+    if context is None:
+        return 0.0, 0.0
+    minimum, maximum, around = context
+
+    price = _number(candidate.item.price)
+    if price is None:
+        # Missing catalog prices are unknown, not evidence of a violation.
+        # Treating them as over-budget incorrectly suppresses valid products in
+        # taxonomy labels such as ``Watches Under $50``.
+        return 1.0, 0.0
+    compliant = (
+        (minimum is None or price >= minimum)
+        and (maximum is None or price <= maximum)
+    )
+
+    if not around:
+        return (1.0 if compliant else 0.0), 0.0
+    target = (
+        (minimum + maximum) / 2.0
+        if minimum is not None and maximum is not None
+        else maximum if maximum is not None else minimum
+    )
+    assert target is not None
+    scale = max(abs(target), 1.0)
+    proximity = max(0.0, 1.0 - abs(price - target) / scale)
+    return (1.0 if compliant else 0.0), proximity
+
+
 def _active_fragments(state: object) -> list[tuple[str, float, str]]:
     """Return active constraint texts as ``(text, weight, attribute)``."""
 
@@ -127,6 +220,13 @@ def _product_text(candidate: Candidate) -> str:
         + _flatten(item.description)
         + _flatten(item.store)
     )
+
+
+def _product_identity_text(candidate: Candidate) -> str:
+    """Return fields that directly identify what kind of product this is."""
+
+    item = candidate.item
+    return " ".join(_flatten(item.title) + _flatten(item.categories))
 
 
 def _product_evidence_units(candidate: Candidate) -> frozenset[str]:
@@ -183,7 +283,8 @@ class EvidenceCoverageReranker:
             return []
 
         fragments = _active_fragments(shopping_state)
-        if not fragments:
+        budget_context = _budget_context(shopping_state)
+        if not fragments and budget_context is None:
             return [
                 RankedCandidate.from_candidate(
                     candidate,
@@ -198,6 +299,13 @@ class EvidenceCoverageReranker:
         product_texts = [_product_text(candidate) for candidate in candidates]
         product_tokens = [_tokens(text) for text in product_texts]
         product_phrases = [_normalized_phrase(text) for text in product_texts]
+        product_identity_texts = [
+            _product_identity_text(candidate) for candidate in candidates
+        ]
+        product_identity_tokens = [_tokens(text) for text in product_identity_texts]
+        product_identity_phrases = [
+            _normalized_phrase(text) for text in product_identity_texts
+        ]
         product_units = [_product_evidence_units(candidate) for candidate in candidates]
         query_tokens = set().union(*(_tokens(text) for text, _, _ in fragments))
         inverse_frequency = {
@@ -217,14 +325,42 @@ class EvidenceCoverageReranker:
         ]
 
         scored: list[
-            tuple[float, float, float, float, float, int, Candidate, list[str]]
+            tuple[
+                float,
+                float,
+                float,
+                int,
+                float,
+                float,
+                float,
+                float,
+                float,
+                int,
+                Candidate,
+                list[str],
+            ]
         ] = []
-        for index, (candidate, observed, product_phrase, evidence_units) in enumerate(
-            zip(candidates, product_tokens, product_phrases, product_units)
+        for index, (
+            candidate,
+            observed,
+            product_phrase,
+            identity_tokens,
+            identity_phrase,
+            evidence_units,
+        ) in enumerate(
+            zip(
+                candidates,
+                product_tokens,
+                product_phrases,
+                product_identity_tokens,
+                product_identity_phrases,
+                product_units,
+            )
         ):
             weighted_coverage = 0.0
             phrase_evidence = 0.0
             exact_unit_evidence = 0.0
+            identity_evidence = 0.0
             total_weight = 0.0
             complete_matches = 0
             matched_attributes: list[str] = []
@@ -252,6 +388,17 @@ class EvidenceCoverageReranker:
                     # keeps robust token/phrase recall primary while preferring
                     # direct evidence over words scattered across long text.
                     exact_unit_evidence += fragment_weight
+                if attribute == AttributeName.CATEGORY.value:
+                    identity_coverage = sum(
+                        inverse_frequency[token]
+                        for token in requested
+                        if token in identity_tokens
+                    ) / denominator
+                    identity_evidence += fragment_weight * identity_coverage
+                    if normalized and normalized in identity_phrase:
+                        identity_evidence += (
+                            _PHRASE_EVIDENCE_WEIGHT * fragment_weight
+                        )
                 if coverage >= 0.999999:
                     complete_matches += 1
                     if attribute not in matched_attributes:
@@ -268,10 +415,18 @@ class EvidenceCoverageReranker:
             popularity = math.log1p(candidate.item.rating_number or 0)
             average_rating = float(candidate.item.average_rating or 0.0)
             retrieval_tiebreak = float(candidate.retrieval_score or 0.0)
+            budget_compliance, budget_proximity = _budget_evidence(
+                budget_context,
+                candidate,
+            )
             scored.append(
                 (
                     score,
+                    budget_compliance,
+                    budget_proximity,
+                    complete_matches,
                     exact_unit_evidence,
+                    identity_evidence,
                     popularity,
                     average_rating,
                     retrieval_tiebreak,
@@ -285,7 +440,12 @@ class EvidenceCoverageReranker:
         # floating differences should not bypass the explicit evidence and
         # stability tie-breakers that follow the primary score.
         scored.sort(
-            key=lambda entry: (round(entry[0], 6), *entry[1:6]),
+            key=lambda entry: (
+                entry[1],
+                entry[2],
+                round(entry[0], 6),
+                *entry[3:10],
+            ),
             reverse=True,
         )
         return [
@@ -296,7 +456,20 @@ class EvidenceCoverageReranker:
                 matched=matched,
                 violation=[],
             )
-            for rank, (score, _, _, _, _, _, candidate, matched) in enumerate(
+            for rank, (
+                score,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                candidate,
+                matched,
+            ) in enumerate(
                 scored[:top_k],
                 start=1,
             )

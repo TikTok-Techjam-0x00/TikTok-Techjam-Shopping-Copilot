@@ -382,6 +382,53 @@ class Retriever:
         start = page * page_size
         return candidates[start:stop]
 
+    def retrieve_strata(
+        self,
+        query: str | None,
+        state: object | None = None,
+        intent: str | None = None,
+        *,
+        windows: tuple[tuple[int, int], ...],
+    ) -> Candidates100:
+        """Return deterministic rank windows from one deeper retrieval call.
+
+        This supports late-turn breadth without issuing the same dense or BM25
+        query once per window. The strict Retrieval contract is preserved by
+        limiting the combined pool to at most 100 candidates.
+        """
+
+        if not windows:
+            return []
+        normalized: list[tuple[int, int]] = []
+        for start, size in windows:
+            if (
+                isinstance(start, bool)
+                or not isinstance(start, int)
+                or start < 0
+            ):
+                raise ValueError("window starts must be non-negative integers")
+            if (
+                isinstance(size, bool)
+                or not isinstance(size, int)
+                or size <= 0
+            ):
+                raise ValueError("window sizes must be positive integers")
+            normalized.append((start, size))
+        if sum(size for _, size in normalized) > 100:
+            raise ValueError("combined retrieval windows must not exceed 100")
+
+        stop = max(start + size for start, size in normalized)
+        candidates = self.strategy.retrieve(query, state, intent, stop)
+        selected: Candidates100 = []
+        seen: set[str] = set()
+        for start, size in normalized:
+            for candidate in candidates[start:start + size]:
+                if candidate.parent_asin in seen:
+                    continue
+                seen.add(candidate.parent_asin)
+                selected.append(candidate)
+        return selected
+
 
 def retrieve(
     retriever: RetrievalStrategy,

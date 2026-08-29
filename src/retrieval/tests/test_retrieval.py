@@ -223,6 +223,26 @@ class BM25RetrieverTest(unittest.TestCase):
         facade = Retriever(self.retriever)
         self.assertEqual(len(facade.retrieve("hiking", k=1)), 1)
 
+    def test_facade_can_select_disjoint_rank_windows_in_one_pool(self) -> None:
+        facade = Retriever(self.retriever)
+        complete = facade.retrieve("shoes", k=3)
+
+        selected = facade.retrieve_strata(
+            "shoes",
+            windows=((0, 1), (2, 1)),
+        )
+
+        self.assertEqual(
+            [candidate.parent_asin for candidate in selected],
+            [complete[0].parent_asin, complete[2].parent_asin],
+        )
+
+    def test_facade_rejects_oversized_stratified_pool(self) -> None:
+        facade = Retriever(self.retriever)
+
+        with self.assertRaises(ValueError):
+            facade.retrieve_strata("shoes", windows=((0, 51), (100, 50)))
+
     def test_text_version_excludes_unselected_fields_from_matching(self) -> None:
         title_only = BM25Retriever(self.catalog, text_version="title_v0")
         core = BM25Retriever(self.catalog, text_version="core_v2")
