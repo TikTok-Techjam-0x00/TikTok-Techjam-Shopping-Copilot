@@ -223,6 +223,27 @@ class BM25RetrieverTest(unittest.TestCase):
         facade = Retriever(self.retriever)
         self.assertEqual(len(facade.retrieve("hiking", k=1)), 1)
 
+    def test_sota_default_is_route_specific_bm25_without_hybrid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "catalog.jsonl"
+            path.write_text(
+                "".join(json.dumps(product) + "\n" for product in PRODUCTS),
+                encoding="utf-8",
+            )
+            facade = Retriever.sota_default(str(path))
+            try:
+                strategy = facade.strategy
+                self.assertIsInstance(strategy, IntentRoutedRetriever)
+                self.assertIsInstance(strategy.buying, BM25Retriever)
+                self.assertIsInstance(strategy.browsing, BM25Retriever)
+                self.assertEqual(strategy.buying.weights.store, 0.75)
+                self.assertEqual(strategy.buying.weights.description, 0.5)
+                self.assertEqual(strategy.browsing.weights.title, 5.0)
+                self.assertEqual(strategy.browsing.weights.categories, 6.0)
+            finally:
+                strategy.buying.close()
+                strategy.browsing.close()
+
     def test_facade_can_select_disjoint_rank_windows_in_one_pool(self) -> None:
         facade = Retriever(self.retriever)
         complete = facade.retrieve("shoes", k=3)

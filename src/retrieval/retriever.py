@@ -15,6 +15,29 @@ if TYPE_CHECKING:
     from .hybrid import HybridConfig
 
 
+# Buying keeps the strong identity/constraint columns while reducing noisy
+# merchant and long-description matches.  The Browsing warm start favors the
+# category hierarchy because its first query is intentionally broad.
+SOTA_BUYING_WEIGHTS = BM25Weights(
+    title=6.0,
+    categories=4.0,
+    features=2.5,
+    attributes=2.5,
+    details=2.5,
+    store=0.75,
+    description=0.5,
+)
+SOTA_BROWSING_WEIGHTS = BM25Weights(
+    title=5.0,
+    categories=6.0,
+    features=2.5,
+    attributes=2.5,
+    details=2.5,
+    store=1.5,
+    description=1.0,
+)
+
+
 class RetrievalStrategy(Protocol):
     def retrieve(
         self,
@@ -80,6 +103,8 @@ class Retriever:
         browsing_text_version: str | ProductTextConfig = "title_category_v1",
         browsing_max_turn: int | None = 1,
         weights: BM25Weights | None = None,
+        buying_weights: BM25Weights | None = None,
+        browsing_weights: BM25Weights | None = None,
     ) -> Retriever:
         """Use detailed text for Buying and concise title/category for Browsing."""
         from .routing import IntentRoutedRetriever, IntentRoutingConfig
@@ -89,12 +114,12 @@ class Retriever:
             IntentRoutedRetriever(
                 BM25Retriever(
                     catalog,
-                    weights=weights,
+                    weights=buying_weights or weights,
                     text_version=buying_text_version,
                 ),
                 BM25Retriever(
                     catalog,
-                    weights=weights,
+                    weights=browsing_weights or weights,
                     text_version=browsing_text_version,
                 ),
                 config=IntentRoutingConfig(browsing_max_turn=browsing_max_turn),
@@ -103,21 +128,12 @@ class Retriever:
 
     @classmethod
     def sota_default(cls, catalog_path: str) -> Retriever:
-        """Return the measured SOTA Hybrid, with a startup BM25 fallback.
-
-        The Hybrid itself also falls back per query when the embedding service
-        is temporarily unavailable.  This outer fallback covers missing API
-        configuration, dependencies, or product embedding cache at startup.
-        """
-        try:
-            from .embedding import OpenAIEmbeddingEncoder
-
-            return cls.intent_routed_hybrid_weighted(
-                catalog_path,
-                OpenAIEmbeddingEncoder.from_env(),
-            )
-        except Exception:
-            return cls.bm25_intent_routed(catalog_path)
+        """Return the deterministic intent-routed BM25 production strategy."""
+        return cls.bm25_intent_routed(
+            catalog_path,
+            buying_weights=SOTA_BUYING_WEIGHTS,
+            browsing_weights=SOTA_BROWSING_WEIGHTS,
+        )
 
     @classmethod
     def hybrid(

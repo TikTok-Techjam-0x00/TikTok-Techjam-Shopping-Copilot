@@ -26,12 +26,18 @@ class Pipeline:
         *,
         semantic_resolver: SemanticResolver | None = None,
         semantic_policy: SemanticPolicy | None = None,
+        retrieval_pool_size: int = 100,
     ) -> None:
+        if isinstance(retrieval_pool_size, bool) or not isinstance(retrieval_pool_size, int):
+            raise TypeError("retrieval_pool_size must be an integer")
+        if retrieval_pool_size < 100:
+            raise ValueError("retrieval_pool_size must be at least 100")
         self.catalog_path = Path(catalog_path)
         self.retriever = Retriever.sota_default(str(self.catalog_path))
         self.reranker = QwenReranker(use_local_fallback=True)
         self.semantic_resolver = semantic_resolver
         self.semantic_policy = semantic_policy
+        self.retrieval_pool_size = retrieval_pool_size
         self._sessions: dict[str, ShoppingState] = {}
         self._last_asked: dict[str, str | None] = {}
         self._conversations: dict[str, list[dict[str, str]]] = {}
@@ -66,9 +72,28 @@ class Pipeline:
             semantic_policy=self.semantic_policy,
         )
         query = retrieval_query(state) or sanitize_retrieval_text(user_message)
+        current_epoch = int(state.constraint_epoch)
+        if self._recommendation_epoch.get(session_id) != current_epoch:
+            self._recommended_asins[session_id].clear()
+            self._recommendation_epoch[session_id] = current_epoch
+        previously_shown = self._recommended_asins[session_id]
+
         # Once the first pool has been exhausted, inspect deeper rank windows
         # late in the conversation. Earlier turns retain the strongest page.
-        if turn == 9:
+        if self.retrieval_pool_size > 100:
+            expanded_candidates = self.retriever.retrieve_page(
+                query,
+                state=state,
+                intent=state.intent,
+                page=0,
+                page_size=self.retrieval_pool_size,
+            )
+            candidates_100 = [
+                candidate
+                for candidate in expanded_candidates
+                if candidate.parent_asin not in previously_shown
+            ][:100]
+        elif turn == 9:
             candidates_100 = self.retriever.retrieve_strata(
                 query,
                 state=state,
@@ -91,11 +116,6 @@ class Pipeline:
         # already shown under the current intent. Keep the strongest ordering,
         # but avoid spending later recommendation slots on exact repeats. An
         # intent override starts a new constraint epoch and resets this memory.
-        current_epoch = int(state.constraint_epoch)
-        if self._recommendation_epoch.get(session_id) != current_epoch:
-            self._recommended_asins[session_id].clear()
-            self._recommendation_epoch[session_id] = current_epoch
-
         # A low-confidence early Top 10 can create an irreversible low-rank hit
         # before the customer's clarification arrives. During the first two
         # turns, expose only the strongest unseen candidate; a wrong Top 1 lets
@@ -103,7 +123,6 @@ class Pipeline:
         recommendation_k = 1 if turn <= 2 else top_k
         local_fallback = getattr(self.reranker, "local_fallback", None)
         rank_all = getattr(local_fallback, "rank_all", None)
-        previously_shown = self._recommended_asins[session_id]
         if callable(rank_all):
             ranked_all = rank_all(
                 state,

@@ -12,8 +12,11 @@ from src.pipeline import Pipeline
 class _StaticRetriever:
     def __init__(self, candidates: list[Candidate]) -> None:
         self.candidates = candidates
+        self.page_sizes: list[int | None] = []
 
     def retrieve_page(self, *args: object, **kwargs: object) -> list[Candidate]:
+        value = kwargs.get("page_size")
+        self.page_sizes.append(value if isinstance(value, int) else None)
         return list(self.candidates)
 
     def retrieve_strata(self, *args: object, **kwargs: object) -> list[Candidate]:
@@ -35,11 +38,12 @@ class PipelineExplorationTest(unittest.TestCase):
         )
         self.pipeline = Pipeline(catalog, semantic_resolver=None)
         self._original_strategy = self.pipeline.retriever.strategy
-        self.pipeline.retriever = _StaticRetriever([
+        self.static_retriever = _StaticRetriever([
             Candidate(item=Item(parent_asin="A", title="Alpha")),
             Candidate(item=Item(parent_asin="B", title="Beta")),
             Candidate(item=Item(parent_asin="C", title="Gamma")),
         ])
+        self.pipeline.retriever = self.static_retriever
         self.pipeline.reset("session", {})
 
     def tearDown(self) -> None:
@@ -92,6 +96,26 @@ class PipelineExplorationTest(unittest.TestCase):
 
         self.assertEqual(first["recommendations"][0]["parent_asin"], "A")
         self.assertEqual(overridden["recommendations"][0]["parent_asin"], "A")
+
+    def test_expanded_pool_is_internal_and_uses_configured_size(self) -> None:
+        self.pipeline.retrieval_pool_size = 130
+
+        first = self.pipeline.respond(
+            "session",
+            "I'm looking for accessories, but I'm still exploring.",
+            1,
+            10,
+        )
+        second = self.pipeline.respond(
+            "session",
+            "I don't have an additional preference for other.",
+            2,
+            10,
+        )
+
+        self.assertEqual(self.static_retriever.page_sizes, [130, 130])
+        self.assertEqual(len(first["recommendations"]), 1)
+        self.assertEqual(second["recommendations"][0]["parent_asin"], "B")
 
 
 if __name__ == "__main__":
