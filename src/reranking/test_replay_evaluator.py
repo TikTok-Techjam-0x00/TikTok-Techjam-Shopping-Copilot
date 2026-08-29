@@ -148,21 +148,36 @@ class ReplayEvaluatorIntegrationTest(unittest.TestCase):
             result_directory = evaluate_replay(
                 replay_directory,
                 catalog_path=catalog_path,
-                experiments={
-                    "retrieval_order": RetrievalOrderRanker(),
-                    "s1_rule_fuzzy": SimpleReranker(),
-                },
-                run_id="test-evaluation-v1",
+                experiments={"s1_rule_fuzzy": SimpleReranker()},
+                experiment_id="RR-999",
                 command=["unit-test", "evaluate"],
             )
             report = json.loads((result_directory / "report.json").read_text(encoding="utf-8"))
             self.assertEqual(report["dataset_run_id"], "test-dataset-v1")
-            self.assertEqual(report["evaluation_run_id"], "test-evaluation-v1")
+            self.assertEqual(report["experiment_id"], "RR-999")
+            self.assertEqual(report["evaluation_run_id"], "RR-999")
+            self.assertEqual(result_directory.name, "RR-999")
+            self.assertGreaterEqual(report["total_elapsed_seconds"], 0.0)
             self.assertIn("dataset_git_commit", report)
             self.assertIn("evaluation_git_commit", report)
-            self.assertEqual(set(report["experiments"]), {"retrieval_order", "s1_rule_fuzzy"})
+            self.assertEqual(set(report["experiments"]), {"s1_rule_fuzzy"})
+            metadata = report["experiments"]["s1_rule_fuzzy"]["metadata"]
+            self.assertIn("hard_constraint_strategy", metadata)
+            self.assertIn("score_fusion", metadata)
             self.assertTrue((result_directory / "report.md").is_file())
             self.assertTrue((result_directory / "case_results.jsonl.gz").is_file())
+
+    def test_one_experiment_id_cannot_mix_configurations(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            evaluate_replay(
+                ".",
+                catalog_path="data/catalog.jsonl",
+                experiments={
+                    "retrieval_order": RetrievalOrderRanker(),
+                    "s1_rule_fuzzy": SimpleReranker(),
+                },
+                experiment_id="RR-998",
+            )
 
 
 if __name__ == "__main__":

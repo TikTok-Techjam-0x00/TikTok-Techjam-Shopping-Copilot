@@ -46,18 +46,25 @@ is always written to `manifest.json`.
 ```powershell
 python -m src.reranking.replay.evaluator `
   artifacts/reranking_replay/<dataset-run> `
-  --experiments retrieval_order s1_rule_fuzzy
+  --experiment-id RR-001 `
+  --experiment s1_rule_fuzzy
 ```
+
+One experiment ID evaluates exactly one Reranker configuration. IDs use
+`RR-000`, `RR-001`, ... and the result folder is always
+`<dataset-run>/results/<experiment-id>/`. Run the Retrieval control and S1 as
+separate IDs when a paired comparison is needed.
 
 The CLI prints progress every 100 cases by default; use `--progress-every N` to
 change it or `--progress-every 0` to disable progress output.
 
 The evaluator verifies checksums, restores each `Candidate` from the exact
 recorded Catalog version, ranks all candidates for diagnostics, and writes a new
-result version under `<dataset-run>/results/`:
+result version under `<dataset-run>/results/<experiment-id>/`:
 
-- `report.json`: complete aggregate metrics, experiment configs, and both the
-  dataset-generation and evaluation Git versions.
+- `report.json`: complete aggregate metrics, human-readable configuration,
+  total test duration, and both the dataset-generation and evaluation Git
+  versions.
 - `report.md`: compact comparison table.
 - `case_results.jsonl.gz`: ranks, promotions, demotions, constraint quality, and
   latency for every case and experiment.

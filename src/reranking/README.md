@@ -733,6 +733,10 @@ branch、dirty 状态、各模块最近一次提交、当前文件哈希、Catal
 目标 ASIN 单独保存在 `labels.jsonl`，不会出现在 `cases.jsonl.gz` 或传给
 Reranker。详细格式、命令和指标见 `src/reranking/replay/README.md`。
 
+所有正式实验使用 `RR-000`、`RR-001` 等唯一编号，并登记在
+`src/reranking/experiments/EXPERIMENTS.md`。结果目录必须以同一实验编号命名，
+一个编号只允许对应一套 Reranker 配置。
+
 ## 10. 接口摘要
 
 ```python

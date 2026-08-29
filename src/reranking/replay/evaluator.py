@@ -7,6 +7,7 @@ import dataclasses
 import gzip
 import json
 import math
+import re
 import statistics
 import sys
 import time
@@ -71,11 +72,38 @@ def builtin_experiments() -> dict[str, FullRankingProtocol]:
     }
 
 
-def _safe_run_id(value: str) -> str:
-    cleaned = "".join(character for character in value if character.isalnum() or character in "-_.")
-    if cleaned != value or not cleaned or cleaned in {".", ".."}:
-        raise ValueError("run_id must contain only letters, digits, '-', '_' or '.'")
-    return cleaned
+def builtin_experiment_metadata() -> dict[str, dict[str, str]]:
+    """Human-readable configuration fields mirrored by the experiment registry."""
+
+    return {
+        "retrieval_order": {
+            "hard_constraint_strategy": "None (Retrieval order control)",
+            "semantic_relevance_model": "None",
+            "query_text_serialization": "None",
+            "product_text_serialization": "None",
+            "score_fusion": "None; preserve Retrieval order",
+            "diversity_strategy": "None",
+            "user_profile_signal": "None",
+        },
+        "s1_rule_fuzzy": {
+            "hard_constraint_strategy": "Buying=H2 Feasibility Tier; Browsing=H1 Soft Penalty",
+            "semantic_relevance_model": "S1 local RuleFuzzyScorer",
+            "query_text_serialization": "Structured hard/soft constraints; current user message only when both are empty",
+            "product_text_serialization": "Direct Item attributes plus capped title/category/features/details observations",
+            "score_fusion": "F1 intent-aware hand-tuned linear fusion",
+            "diversity_strategy": "D1 None",
+            "user_profile_signal": "preference_tags lexical match",
+        },
+    }
+
+
+EXPERIMENT_ID_RE = re.compile(r"RR-\d{3,}")
+
+
+def _safe_experiment_id(value: str) -> str:
+    if not EXPERIMENT_ID_RE.fullmatch(value):
+        raise ValueError("experiment_id must use the form 'RR-001'")
+    return value
 
 
 def _json_safe(value: Any) -> Any:
@@ -372,18 +400,36 @@ def summarize_experiment(
 
 def _markdown_report(report: Mapping[str, Any]) -> str:
     lines = [
-        "# Reranking Replay Report",
+        f"# Reranking Experiment {report['experiment_id']}",
         "",
+        f"- Experiment ID: `{report['experiment_id']}`",
         f"- Dataset run: `{report['dataset_run_id']}`",
-        f"- Evaluation run: `{report['evaluation_run_id']}`",
         f"- Dataset Git commit: `{report['dataset_git_commit']}`",
         f"- Evaluation Git commit: `{report['evaluation_git_commit']}`",
+        f"- Started: `{report['started_at_utc']}`",
+        f"- Completed: `{report['completed_at_utc']}`",
+        f"- Total elapsed: `{report['total_elapsed_seconds']:.3f}s`",
         "",
-        "## Aggregate comparison",
+        "## Configuration",
         "",
-        "| Experiment | Cond. Hit@10 | Cond. MRR@10 | Promotions | Demotions | Mean rank Δ | Hard violation | P95 ms | Replay score |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Reranker | Hard Constraint | Semantic relevance | Query serialization | Product serialization | Score fusion | Diversity | User profile |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
+    for name, result in report["experiments"].items():
+        metadata = result["metadata"]
+        lines.append(
+            f"| {name} | {metadata['hard_constraint_strategy']} | "
+            f"{metadata['semantic_relevance_model']} | {metadata['query_text_serialization']} | "
+            f"{metadata['product_text_serialization']} | {metadata['score_fusion']} | "
+            f"{metadata['diversity_strategy']} | {metadata['user_profile_signal']} |"
+        )
+    lines.extend([
+        "",
+        "## Result",
+        "",
+        "| Experiment | Cond. Hit@10 | Cond. MRR@10 | Promotions | Demotions | Mean rank Δ | Hard violation | P95 ms | Replay score | Experiment elapsed s |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
     for name, result in report["experiments"].items():
         case = result["summary"]["case_metrics"]
         latency = result["summary"]["latency_ms"]
@@ -394,7 +440,7 @@ def _markdown_report(report: Mapping[str, Any]) -> str:
             f"{case['conditional_mrr_at_10']:.6f} | {case['promotion_count']} | "
             f"{case['demotion_count']} | {rank_change if rank_change is not None else '—'} | "
             f"{case['hard_violation_item_rate_at_10']:.6f} | {latency['p95']:.3f} | "
-            f"{session['replay_technical_score']:.6f} |"
+            f"{session['replay_technical_score']:.6f} | {result['elapsed_seconds']:.3f} |"
         )
     lines.extend(
         [
@@ -413,15 +459,21 @@ def evaluate_replay(
     *,
     catalog_path: str | Path,
     experiments: Mapping[str, FullRankingProtocol],
+    experiment_id: str,
+    experiment_metadata: Mapping[str, Mapping[str, Any]] | None = None,
     output_root: str | Path | None = None,
-    run_id: str | None = None,
     progress_every: int = 0,
     command: list[str] | None = None,
 ) -> Path:
     if not experiments:
         raise ValueError("at least one experiment is required")
+    if len(experiments) != 1:
+        raise ValueError("one experiment_id must evaluate exactly one Reranker configuration")
     if progress_every < 0:
         raise ValueError("progress_every must not be negative")
+    resolved_experiment_id = _safe_experiment_id(experiment_id)
+    evaluation_started = time.perf_counter()
+    started_at_utc = datetime.now(timezone.utc).isoformat()
     dataset_directory = Path(dataset_directory).resolve()
     catalog_path = Path(catalog_path).resolve()
     manifest, cases, labels = load_replay_dataset(dataset_directory)
@@ -432,7 +484,6 @@ def evaluate_replay(
     catalog = Catalog.load(catalog_path)
     matcher = ConstraintMatcher()
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evaluation_provenance = collect_provenance(
         PROJECT_ROOT,
         catalog_path=catalog_path,
@@ -440,15 +491,18 @@ def evaluate_replay(
         dataset_role="reranking_replay_cases",
         command=command,
     )
-    short_commit = evaluation_provenance["git"]["short_commit"]
-    resolved_run_id = _safe_run_id(run_id or f"{timestamp}_{short_commit}")
-    output_directory = Path(output_root).resolve() / resolved_run_id if output_root else dataset_directory / "results" / resolved_run_id
+    output_directory = (
+        Path(output_root).resolve() / resolved_experiment_id
+        if output_root
+        else dataset_directory / "results" / resolved_experiment_id
+    )
     output_directory.mkdir(parents=True, exist_ok=False)
 
     experiment_reports: dict[str, Any] = {}
     detailed_rows: list[dict[str, Any]] = []
     max_turns = int(manifest["generation_policy"]["max_turns"])
     for name, ranker in experiments.items():
+        experiment_started = time.perf_counter()
         rows: list[dict[str, Any]] = []
         for index, case in enumerate(cases, start=1):
             candidates = _restore_candidates(case, catalog)
@@ -477,17 +531,31 @@ def evaluate_replay(
                     ),
                     flush=True,
                 )
+        metadata = dict(builtin_experiment_metadata().get(name, {}))
+        if experiment_metadata and name in experiment_metadata:
+            metadata.update(experiment_metadata[name])
+        required_metadata = tuple(next(iter(builtin_experiment_metadata().values())))
+        for field in required_metadata:
+            metadata.setdefault(field, "Unspecified")
         experiment_reports[name] = {
+            "metadata": _json_safe(metadata),
             "config": _experiment_config(ranker),
             "summary": summarize_experiment(rows, max_turns=max_turns),
+            "elapsed_seconds": round(time.perf_counter() - experiment_started, 3),
         }
 
     dataset_git = manifest["generation_provenance"]["git"]
+    completed_at_utc = datetime.now(timezone.utc).isoformat()
+    total_elapsed_seconds = round(time.perf_counter() - evaluation_started, 3)
     report = {
-        "schema_version": "reranking-replay-report-v1",
+        "schema_version": "reranking-replay-report-v2",
+        "experiment_id": resolved_experiment_id,
         "dataset_run_id": manifest["run_id"],
-        "evaluation_run_id": resolved_run_id,
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "evaluation_run_id": resolved_experiment_id,
+        "started_at_utc": started_at_utc,
+        "completed_at_utc": completed_at_utc,
+        "total_elapsed_seconds": total_elapsed_seconds,
+        "created_at_utc": completed_at_utc,
         "dataset_git_commit": dataset_git["commit"],
         "dataset_git_dirty": dataset_git["dirty"],
         "evaluation_git_commit": evaluation_provenance["git"]["commit"],
@@ -507,17 +575,16 @@ def evaluate_replay(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Replay fixed cases against one or more Rerankers.")
+    parser = argparse.ArgumentParser(description="Replay fixed cases against one numbered Reranker experiment.")
     parser.add_argument("dataset_directory", type=Path)
     parser.add_argument("--catalog", type=Path, default=PROJECT_ROOT / "data" / "catalog.jsonl")
     parser.add_argument(
-        "--experiments",
-        nargs="+",
-        default=["retrieval_order", "s1_rule_fuzzy"],
+        "--experiment",
+        default="s1_rule_fuzzy",
         choices=sorted(builtin_experiments()),
     )
+    parser.add_argument("--experiment-id", required=True, help="Stable ID such as RR-001.")
     parser.add_argument("--output-root", type=Path, default=None)
-    parser.add_argument("--run-id", default=None)
     parser.add_argument("--progress-every", type=int, default=100)
     return parser
 
@@ -528,9 +595,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     output = evaluate_replay(
         args.dataset_directory,
         catalog_path=args.catalog,
-        experiments={name: available[name] for name in args.experiments},
+        experiments={args.experiment: available[args.experiment]},
+        experiment_id=args.experiment_id,
         output_root=args.output_root,
-        run_id=args.run_id,
         progress_every=args.progress_every,
         command=[sys.executable, "-m", "src.reranking.replay.evaluator", *(argv or sys.argv[1:])],
     )
