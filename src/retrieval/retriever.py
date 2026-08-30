@@ -136,6 +136,62 @@ class Retriever:
         )
 
     @classmethod
+    def sota_semantic_residual(
+        cls,
+        catalog_path: str,
+        *,
+        cache_root: str | Path = Path("artifacts") / "retrieval" / "dense",
+    ) -> Retriever:
+        """Add one late semantic exploration cohort to the SOTA BM25 route.
+
+        BM25 remains the primary retriever on every ordinary page.  When the
+        precomputed needs-vector cache and embedding credentials are available,
+        turn 8 may request a small lexical-gated semantic residual through
+        :meth:`retrieve_residual_page`. Missing configuration or an invalid
+        cache returns the exact deterministic BM25 strategy.
+        """
+        from .dense import DenseRetriever
+        from .embedding import OpenAIEmbeddingEncoder
+        from .residual import LexicalGatedResidualRetriever, ResidualDenseConfig
+
+        lexical = cls.sota_default(catalog_path)
+        needs_cache = (
+            Path(cache_root)
+            / "text-embedding-v4__dense_needs_v1__d256"
+        )
+        required = ("manifest.json", "parent_asins.json", "embeddings.npy")
+        if not all((needs_cache / filename).is_file() for filename in required):
+            return lexical
+        try:
+            encoder = OpenAIEmbeddingEncoder.from_env()
+            catalog = getattr(lexical.strategy, "catalog", None)
+            if catalog is None:
+                catalog = Catalog.load(catalog_path)
+            semantic = DenseRetriever(
+                catalog,
+                encoder,
+                needs_cache,
+                text_version="dense_needs_v1",
+                query_embedding_mode="query_instruction",
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return lexical
+        return cls(
+            LexicalGatedResidualRetriever(
+                lexical.strategy,
+                semantic,
+                config=ResidualDenseConfig(
+                    protected_lexical=10,
+                    semantic_slots=10,
+                    semantic_source_k=200,
+                    lexical_gate_depth=1000,
+                    minimum_lexical_rank=301,
+                    fill_lexical_tail=False,
+                ),
+            )
+        )
+
+    @classmethod
     def hybrid(
         cls,
         bm25: RetrievalStrategy,
@@ -397,6 +453,38 @@ class Retriever:
         candidates = self.strategy.retrieve(query, state, intent, stop)
         start = page * page_size
         return candidates[start:stop]
+
+    def retrieve_residual_page(
+        self,
+        query: str | None,
+        state: object | None = None,
+        intent: str | None = None,
+        *,
+        page: int = 0,
+        page_size: int = 100,
+    ) -> Candidates100:
+        """Return a strategy-specific residual page or the ordinary page.
+
+        This keeps the production facade deterministic for BM25 while allowing
+        an explicitly configured strategy to add a bounded semantic quota.
+        """
+
+        residual = getattr(self.strategy, "retrieve_residual_page", None)
+        if callable(residual):
+            return residual(
+                query,
+                state,
+                intent,
+                page=page,
+                page_size=page_size,
+            )
+        return self.retrieve_page(
+            query,
+            state,
+            intent,
+            page=page,
+            page_size=page_size,
+        )
 
     def retrieve_strata(
         self,

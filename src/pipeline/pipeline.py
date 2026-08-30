@@ -33,7 +33,7 @@ class Pipeline:
         if retrieval_pool_size < 100:
             raise ValueError("retrieval_pool_size must be at least 100")
         self.catalog_path = Path(catalog_path)
-        self.retriever = Retriever.sota_default(str(self.catalog_path))
+        self.retriever = Retriever.sota_semantic_residual(str(self.catalog_path))
         self.reranker = QwenReranker(use_local_fallback=True)
         self.semantic_resolver = semantic_resolver
         self.semantic_policy = semantic_policy
@@ -93,6 +93,14 @@ class Pipeline:
                 for candidate in expanded_candidates
                 if candidate.parent_asin not in previously_shown
             ][:100]
+        elif turn == 8:
+            candidates_100 = self.retriever.retrieve_residual_page(
+                query,
+                state=state,
+                intent=state.intent,
+                page=2,
+                page_size=100,
+            )
         elif turn == 9:
             candidates_100 = self.retriever.retrieve_strata(
                 query,

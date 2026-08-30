@@ -46,6 +46,26 @@ The command writes per-session results and aggregate metrics to `results.json`.
 The included weak BM25 starter scores Hit Rate@10 `0.125`, MRR `0.068034`, and
 MTTC `9.81` on the released public set. See `docs/baseline_results.json`.
 
+## SOTA 2.2 Retrieval
+
+This branch uses routed BM25 plus a lexical-gated Dense residual for unresolved
+sessions reaching turn 8. Pull the `dense_needs_v1` product matrix before
+evaluation:
+
+```bash
+git lfs pull
+```
+
+Configure the embedding endpoint using `.env.example`. If the vector cache,
+credentials, or provider is unavailable, the Agent automatically falls back to
+the exact SOTA 2.1 BM25 path.
+
+Three reproducible 800-session generalization sets are published under
+`data/generalization/v1/`. They exclude Public-200 targets, are mutually target
+disjoint, and must be used only for offline evaluation. See
+[`docs/SOTA_2_2_RETRIEVAL.md`](docs/SOTA_2_2_RETRIEVAL.md) for the frozen
+algorithm, scores, and anti-leakage controls.
+
 ## Agent Interface
 
 ```python

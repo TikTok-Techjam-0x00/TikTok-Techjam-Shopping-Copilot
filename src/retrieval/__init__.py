@@ -24,6 +24,7 @@ from .hybrid import (
 )
 from .multivector import MultiVectorConfig, MultiVectorDenseRetriever
 from .query import build_retrieval_query
+from .residual import LexicalGatedResidualRetriever, ResidualDenseConfig
 from .retriever import Retriever, retrieve
 from .routing import IntentRoutedRetriever, IntentRoutingConfig
 from .text import (
@@ -60,6 +61,8 @@ __all__ = [
     "weighted_score_fusion",
     "MultiVectorConfig",
     "MultiVectorDenseRetriever",
+    "LexicalGatedResidualRetriever",
+    "ResidualDenseConfig",
     "Retriever",
     "IntentRoutedRetriever",
     "IntentRoutingConfig",
