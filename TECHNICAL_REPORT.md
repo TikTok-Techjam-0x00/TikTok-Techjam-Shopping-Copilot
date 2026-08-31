@@ -376,3 +376,18 @@ whether turn 8 reaches the Dense path.
   logs.
 - Public-set performance can guide engineering but does not guarantee the same
   result on hidden sessions or future catalog versions.
+
+## 👥 9. Team Contributions
+
+0x00 Shopping Copilot was developed as a collaborative team effort. Rather than assigning isolated modules to individual members, we worked through shared design reviews, implementation, evaluation, and integration across the full system.
+
+Team contributions covered:
+
+- **System architecture and agent design:** defining the end-to-end conversational shopping pipeline and interfaces between State, Retrieval, Reranking, Dialogue, and Evaluation.
+- **Conversational state and intent handling:** designing constraint tracking, intent classification, override handling, and clarification logic.
+- **Retrieval and ranking:** developing and iterating on BM25 retrieval, semantic retrieval experiments, evidence-aware reranking, and candidate exploration strategies.
+- **Evaluation and experimentation:** integrating the official evaluator, running controlled experiments, analyzing failure cases, and iterating toward the final SOTA 2.2 system.
+- **Integration and reliability:** connecting components into the official `Agent` interface, validating reproducibility, handling fallbacks, and preparing the final submission.
+- **Demo and communication:** building the demonstration frontend, technical documentation, architecture presentation, and project video.
+
+Responsibilities evolved throughout the hackathon, and team members frequently collaborated across component boundaries through code review, debugging, experimentation, and integration. The final system therefore reflects shared ownership of the overall architecture and engineering outcome.
