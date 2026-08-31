@@ -70,6 +70,21 @@ class LexicalGatedResidualRetriever:
         self.config = config or ResidualDenseConfig()
         self.catalog = getattr(lexical, "catalog", None)
 
+    def reset_usage(self) -> None:
+        """Reset usage for the optional semantic residual provider."""
+
+        reset = getattr(self.semantic, "reset_usage", None)
+        if callable(reset):
+            reset()
+
+    def model_usage(self) -> tuple[int, int]:
+        """Return usage incurred by the optional semantic residual."""
+
+        usage = getattr(self.semantic, "model_usage", None)
+        if callable(usage):
+            return usage()
+        return 0, 0
+
     def retrieve(
         self,
         query: str | None,

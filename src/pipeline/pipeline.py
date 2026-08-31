@@ -55,9 +55,41 @@ class Pipeline:
             raise KeyError(session_id)
         return self._sessions[session_id].to_dict()
 
+    @staticmethod
+    def _reset_model_usage(component: object | None) -> None:
+        reset = getattr(component, "reset_usage", None)
+        if callable(reset):
+            reset()
+
+    @staticmethod
+    def _model_usage(component: object | None) -> tuple[int, int]:
+        usage = getattr(component, "model_usage", None)
+        if not callable(usage):
+            return 0, 0
+        prompt_tokens, completion_tokens = usage()
+        return (
+            max(0, int(prompt_tokens)),
+            max(0, int(completion_tokens)),
+        )
+
+    @classmethod
+    def _combined_model_usage(cls, *components: object | None) -> tuple[int, int]:
+        prompt_tokens = 0
+        completion_tokens = 0
+        for component in components:
+            prompt, completion = cls._model_usage(component)
+            prompt_tokens += prompt
+            completion_tokens += completion
+        return prompt_tokens, completion_tokens
+
     def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> dict:
         if session_id not in self._sessions:
             raise RuntimeError("reset must be called before respond")
+
+        # The official evaluator sums usage from every response, so reset here
+        # to ensure this response reports only the current turn's provider calls.
+        self._reset_model_usage(self.semantic_resolver)
+        self._reset_model_usage(self.retriever)
 
         state = update_state(
             self._sessions[session_id],
@@ -136,6 +168,10 @@ class Pipeline:
         record_asked_attribute(state, ask_attribute)
         self._last_asked[session_id] = ask_attribute
         agent_message = decision["message"] or "Here are the closest matches I found."
+        prompt_tokens, completion_tokens = self._combined_model_usage(
+            self.semantic_resolver,
+            self.retriever,
+        )
 
         return {
             "message": agent_message,
@@ -145,9 +181,7 @@ class Pipeline:
                 recommendation_k,
             ),
             "usage": {
-                # Local ranking uses no model tokens. Optional State/embedding
-                # calls are not included in this existing response counter.
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
             },
         }

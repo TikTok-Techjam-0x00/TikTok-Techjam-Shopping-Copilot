@@ -317,12 +317,31 @@ Efficiency    = clip((11 - MTTC) / 10, 0, 1)
 TechnicalScore = 0.50 * HitRate@10 + 0.30 * MRR + 0.20 * Efficiency
 ```
 
-The retained weak BM25 baseline and the no-key production reference are:
+The retained weak BM25 baseline and the current SOTA 2.2 production runs are:
 
 | System | HitRate@10 | MRR | MTTC | Efficiency | TechnicalScore |
 |---|---:|---:|---:|---:|---:|
 | Weak BM25 baseline | 0.125000 | 0.068034 | 9.81000 | 0.119000 | 0.106710 |
 | Production Agent, no API key | 0.995000 | 0.960833 | 2.23000 | 0.877000 | 0.961150 |
+| Production Agent, API enabled | 0.995000 | 0.960833 | 2.23000 | 0.877000 | 0.961150 |
+
+The latest API-enabled acceptance run produced the following scenario-level
+results through the unmodified official evaluator:
+
+| Scenario | Sessions | HitRate@10 | MRR | MTTC |
+|---|---:|---:|---:|---:|
+| Buying | 80 | 0.987500 | 0.965625 | 1.875000 |
+| Browsing | 80 | 1.000000 | 0.963542 | 2.037500 |
+| Intent Override | 30 | 1.000000 | 0.927778 | 3.633333 |
+| Boundary | 10 | 1.000000 | 1.000000 | 2.400000 |
+| **Overall** | **200** | **0.995000** | **0.960833** | **2.230000** |
+
+Final acceptance summary:
+
+- **TechnicalScore:** 0.961150
+- **Efficiency:** 0.877000
+- **Evaluator-reported token usage:** 2,099 prompt + 271 completion = 2,370
+- **Repository unit tests:** 8/8 passed
 
 The production value is the repository's documented Public-200 reference run;
 it is not a claim about hidden-test performance. Reproduction commands and data
@@ -330,19 +349,19 @@ preparation checks are provided in `README.md`.
 
 ## ⚡ 7. Runtime, Token Usage and Cost
 
-Two complete Public-200 runs were measured, including Agent initialization. The
-offline reference took about 51 seconds. A fresh-clone API-enabled audit on
-2026-08-31 used Python 3.11.9, the shipped 50,000 x 256 LFS vector cache, and
-the default Singapore DashScope endpoints; it took about 58 seconds.
+Complete Public-200 runs were measured including Agent initialization. The
+offline reference took about 51 seconds. The final API-enabled acceptance run
+on 2026-08-31 used Python 3.11.9, the shipped 50,000 x 256 LFS vector cache,
+and the default Singapore DashScope endpoints.
 
-| Mode | Network during evaluation | Provider-observed token usage | Approximate direct model cost |
+| Mode | Network during evaluation | Evaluator-reported token usage | Approximate direct model cost |
 |---|---|---:|---:|
 | No API key | None after installation/data preparation | 0 | USD 0 |
-| API key and compatible Dense cache | Two `qwen-plus` State calls and one turn-8 `text-embedding-v4` query call | 2,098 input + 273 output = 2,371 | USD 0.001136 |
+| API key and compatible Dense cache | Two `qwen-plus` State calls and one turn-8 `text-embedding-v4` query call | 2,099 input + 271 output = 2,370 | USD 0.001134 |
 
-The API-enabled audit measured the two models separately:
+Provider usage in the final API-enabled run was:
 
-- `qwen-plus`: 2 calls, 2,005 input tokens and 273 output tokens;
+- `qwen-plus`: 2 calls, 2,006 input tokens and 271 output tokens;
 - `text-embedding-v4` (256 dimensions, `text_type=query`): 1 call and 93
   input tokens, with no completion tokens.
 
@@ -356,18 +375,11 @@ evaluation. Pricing references are the Alibaba Cloud Model Studio
 [`qwen-plus` pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing)
 and [`text-embedding-v4` API documentation](https://www.alibabacloud.com/help/en/model-studio/text-embedding-synchronous-api).
 
-The API-enabled run produced exactly the same Public-200 metrics as the offline
-reference: HitRate@10 0.995000, MRR 0.960833, MTTC 2.23000, and TechnicalScore
-0.961150. All 200 session-level hit outcomes, first-hit turns, and best ranks
-were also unchanged. The optional calls therefore added no Public-200 score
-gain in this run, although the frozen SOTA 2.2 generalization study records two
-additional hits on IID-800.
-
 BM25, Evidence Coverage Reranking, and clarification are local and consume no
-model tokens. The current Agent response still emits `prompt_tokens=0` and
-`completion_tokens=0`; the figures above were captured from provider `usage`
-responses by separate metadata-only audit instrumentation without modifying the
-official evaluator or model outputs.
+model tokens. The Agent now reports the provider-returned State and query-
+embedding usage on each turn. The official evaluator sums those per-turn values;
+no evaluator code or model output is modified. Turns that make no model call
+correctly report zero usage.
 
 The submission does not require network access for its reliable default path.
 If credentials, the compatible vector cache, network access, or the provider
@@ -398,8 +410,6 @@ and catalog preparation.
   not see it again until an override starts a new epoch.
 - The runtime figures are end-to-end local observations and do not separate
   index construction, per-turn latency, or API latency.
-- Optional provider token usage is disclosed from the measured audit but is not
-  yet aggregated into the Agent's response-level `usage` field.
 - Public-set performance can guide engineering but does not guarantee the same
   result on hidden sessions or future catalog versions.
 

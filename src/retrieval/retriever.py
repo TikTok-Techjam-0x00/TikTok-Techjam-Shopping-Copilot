@@ -49,6 +49,21 @@ class Retriever:
     def __init__(self, strategy: RetrievalStrategy) -> None:
         self.strategy = strategy
 
+    def reset_usage(self) -> None:
+        """Reset optional provider usage for the next Agent turn."""
+
+        reset = getattr(self.strategy, "reset_usage", None)
+        if callable(reset):
+            reset()
+
+    def model_usage(self) -> tuple[int, int]:
+        """Return optional provider usage since the last reset."""
+
+        usage = getattr(self.strategy, "model_usage", None)
+        if callable(usage):
+            return usage()
+        return 0, 0
+
     @classmethod
     def bm25(
         cls,

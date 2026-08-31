@@ -60,6 +60,21 @@ class DenseRetriever:
         )
         self._query_vectors: OrderedDict[str, np.ndarray] = OrderedDict()
 
+    def reset_usage(self) -> None:
+        """Reset query-provider usage while preserving the embedding cache."""
+
+        reset = getattr(self.encoder, "reset_usage", None)
+        if callable(reset):
+            reset()
+
+    def model_usage(self) -> tuple[int, int]:
+        """Return tokens used for uncached query embeddings since reset."""
+
+        usage = getattr(self.encoder, "model_usage", None)
+        if callable(usage):
+            return usage()
+        return 0, 0
+
     def _remember_query(self, query: str, vector: np.ndarray) -> None:
         if self.query_cache_size <= 0:
             return

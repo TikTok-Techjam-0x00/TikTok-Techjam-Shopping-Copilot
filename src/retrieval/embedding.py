@@ -107,6 +107,8 @@ class OpenAIEmbeddingEncoder:
         self.model = config.model
         self.dimension = config.dimension
         self.batch_size = config.batch_size
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
         self._client = OpenAI(
             api_key=config.api_key,
             base_url=config.base_url,
@@ -118,6 +120,17 @@ class OpenAIEmbeddingEncoder:
     def from_env(cls) -> OpenAIEmbeddingEncoder:
         return cls(OpenAIEmbeddingConfig.from_env())
 
+    def reset_usage(self) -> None:
+        """Reset provider token counts for the next Agent turn."""
+
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    def model_usage(self) -> tuple[int, int]:
+        """Return provider-reported input and output tokens since reset."""
+
+        return self.prompt_tokens, self.completion_tokens
+
     def encode(self, texts: Sequence[str]) -> np.ndarray:
         if not texts:
             return np.empty((0, self.dimension), dtype=np.float32)
@@ -127,6 +140,11 @@ class OpenAIEmbeddingEncoder:
             input=prepared,
             dimensions=self.dimension,
             encoding_format="float",
+        )
+        usage = getattr(response, "usage", None)
+        self.prompt_tokens += max(
+            0,
+            int(getattr(usage, "prompt_tokens", 0) or 0),
         )
         ordered = sorted(response.data, key=lambda value: value.index)
         matrix = np.asarray([value.embedding for value in ordered], dtype=np.float32)
@@ -179,6 +197,11 @@ class OpenAIEmbeddingEncoder:
                     timeout=self.config.timeout_seconds,
                 ) as response:
                     body = json.loads(response.read().decode("utf-8"))
+                usage = body.get("usage", {})
+                self.prompt_tokens += max(
+                    0,
+                    int(usage.get("total_tokens", 0) or 0),
+                )
                 embeddings = body.get("output", {}).get("embeddings", [])
                 ordered = sorted(
                     embeddings,

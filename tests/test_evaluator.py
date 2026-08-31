@@ -19,6 +19,23 @@ class EchoTargetAgent:
         return {"message": "ok", "ask_attribute": None, "recommendations": [{"parent_asin": asin}]}
 
 
+class PerTurnUsageAgent:
+    def reset(self, session_id: str, user_profile: dict) -> None:
+        self.session_id = session_id
+
+    def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> dict:
+        asin = "B" if turn == 2 else "A"
+        return {
+            "message": "ok",
+            "ask_attribute": None,
+            "recommendations": [{"parent_asin": asin}],
+            "usage": {
+                "prompt_tokens": 10 if turn == 1 else 3,
+                "completion_tokens": 2 if turn == 1 else 1,
+            },
+        }
+
+
 class EvaluatorTest(unittest.TestCase):
     def test_normalization_preserves_first_valid_unique_order(self) -> None:
         payload = [
@@ -79,6 +96,39 @@ class EvaluatorTest(unittest.TestCase):
             }]
             result = evaluate(EchoTargetAgent(), samples, catalog_ids, categories, products)
             self.assertEqual(result["hit_rate_at_10"], 1.0)
+
+    def test_evaluate_sums_per_turn_agent_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = Path(directory) / "catalog.jsonl"
+            rows = [
+                {"parent_asin": "A", "title": "first", "categories": ["Other"]},
+                {"parent_asin": "B", "title": "target", "categories": ["Other"]},
+            ]
+            catalog_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            catalog_ids, categories, products = catalog_index(catalog_path)
+            samples = [{
+                "sample_id": "public_v2_usage",
+                "scenario_type": "buying",
+                "user_profile": {},
+                "ground_truth": {"parent_asin": "B"},
+            }]
+
+            result = evaluate(
+                PerTurnUsageAgent(),
+                samples,
+                catalog_ids,
+                categories,
+                products,
+            )
+
+            self.assertEqual(result["reported_token_usage"], {
+                "prompt_tokens": 13,
+                "completion_tokens": 3,
+                "total_tokens": 16,
+            })
 
 
 if __name__ == "__main__":

@@ -172,9 +172,10 @@ from starter.agent import Agent
 ~~~
 
 Optional embedding and State calls require network access and may incur
-costs and timeout/retry latency. The Agent response reports zero ranking tokens;
-it does not aggregate embedding or State-model usage. Do not
-interpret zero reported tokens in an API-enabled run as zero provider usage.
+costs and timeout/retry latency. Each Agent response reports the provider-
+returned State and query-embedding tokens used on that turn. Local BM25,
+Evidence Coverage Reranking, and clarification consume no model tokens, so a
+turn with no provider call reports zero prompt and completion tokens.
 
 ## 📊 Local verification
 
@@ -184,8 +185,7 @@ at commit `9c9e7c9` exactly, without local progress-display or CLI extensions.
 Run without API access:
 
 ~~~bash
-python -c "from pathlib import Path; Path('artifacts/validation').mkdir(parents=True, exist_ok=True)"
-python -c "import os, runpy; os.environ['DASHSCOPE_API_KEY']=''; runpy.run_module('evaluator.local_evaluator', run_name='__main__')" --output artifacts/validation/public200.json
+python -c "import os, runpy; os.environ['DASHSCOPE_API_KEY']=''; runpy.run_module('evaluator.local_evaluator', run_name='__main__')" --output results.json
 ~~~
 
 Output is ignored by Git. The official CLI accepts `--catalog`, `--dataset`,
@@ -198,7 +198,7 @@ benchmark or a guarantee of hidden-test performance.
 The organizer's evaluator tests are also retained:
 
 ~~~bash
-python -c "import os, runpy; os.environ['DASHSCOPE_API_KEY']=''; runpy.run_module('unittest', run_name='__main__')" tests.test_evaluator
+python -m unittest discover -s tests -v
 ~~~
 
 ## 🖥️ Presentation frontend

@@ -57,6 +57,8 @@ class QwenSemanticResolver:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
         if client is None:
             from openai import OpenAI
 
@@ -68,6 +70,17 @@ class QwenSemanticResolver:
             )
         self.client = client
         self._normalizer = CallableSemanticResolver(lambda request: self._call(request))
+
+    def reset_usage(self) -> None:
+        """Reset provider token counts for the next Agent turn."""
+
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    def model_usage(self) -> tuple[int, int]:
+        """Return provider-reported input and output tokens since reset."""
+
+        return self.prompt_tokens, self.completion_tokens
 
     @classmethod
     def from_env(cls) -> QwenSemanticResolver | None:
@@ -123,6 +136,15 @@ class QwenSemanticResolver:
             "temperature": 0,
         }
         response = self.client.chat.completions.create(**request_body)
+        usage = getattr(response, "usage", None)
+        self.prompt_tokens += max(
+            0,
+            int(getattr(usage, "prompt_tokens", 0) or 0),
+        )
+        self.completion_tokens += max(
+            0,
+            int(getattr(usage, "completion_tokens", 0) or 0),
+        )
         content = response.choices[0].message.content
         if not isinstance(content, str):
             return None
