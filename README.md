@@ -1,5 +1,12 @@
 # TikTok TechJam Shopping Copilot
 
+> 🛒 **Understand deeply. Search widely. Recommend precisely.**
+
+[![TechJam 2026](https://img.shields.io/badge/TikTok_TechJam-2026-ff0050?style=for-the-badge&logo=tiktok&logoColor=white)](https://github.com/TikTok-Techjam-0x00/TikTok-Techjam-Shopping-Copilot)
+![Track](https://img.shields.io/badge/Track_4-Conversational_Search-5b21b6?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)
+![Technical Score](https://img.shields.io/badge/Technical_Score-0.96115-16a34a?style=for-the-badge)
+
 Team 0x00's final Agent for TechJam 2026 Track 4, based on `sota-2.2`
 (`d5ac6e9`).
 This submission keeps the core Agent, the presentation frontend, and the
@@ -9,7 +16,15 @@ For the design rationale and turn-by-turn implementation—including State and
 intent handling, Retrieval, Reranking, clarification, evaluation, runtime, and
 limitations—see the [Technical Report](TECHNICAL_REPORT.md).
 
-## Agent entry point
+### 🧭 Quick links
+
+[🚀 Quick Start](#-installation-and-catalog) ·
+[🧠 Production Workflow](#-production-workflow) ·
+[📊 Evaluation](#-local-verification) ·
+[🖥️ Demo Frontend](#️-presentation-frontend) ·
+[📘 Technical Report](TECHNICAL_REPORT.md)
+
+## 🤖 Agent entry point
 
 The official evaluator imports `Agent` from `starter/agent.py`:
 
@@ -31,7 +46,7 @@ response = agent.respond(
 Call `reset` once per session and preserve the same Agent for subsequent
 turns. The Agent never receives target labels or hidden intent cards.
 
-## Installation and catalog
+## 🚀 Installation and catalog
 
 Use Python 3.10+ with SQLite FTS5 support; local validation used Python
 3.11.4. SQLite is supplied by Python, not installed from `requirements.txt`.
@@ -79,7 +94,7 @@ The script checks both archive and catalog SHA256, writes
 `data/catalog.jsonl`, and refuses to overwrite a different existing file.
 It does not download data. The full upstream Amazon dataset is not needed.
 
-## Production workflow
+## 🧠 Production workflow
 
 1. **State:** maintain buying/browsing intent, disclosed constraints,
    no-preference fields, rejected values, and the current constraint epoch.
@@ -96,7 +111,7 @@ Shared contracts are `Item`, `Candidate(item=...)`, and
 `RankedCandidate(item=...)`. Canonical shopping attributes are:
 `category, material, color, size, style, brand, budget, feature, use_case, other`.
 
-## Runtime modes and external services
+## ⚙️ Runtime modes and external services
 
 The original SOTA 2.2 automatic behavior remains:
 
@@ -110,7 +125,7 @@ A local `.env` or process environment can change the execution path. Copy
 `.env.example` only when intentionally enabling external services. Never
 commit a real API key.
 
-### Optional Git LFS vector cache
+### 📦 Optional Git LFS vector cache
 
 Install the Git LFS system tool if `git lfs version` is unavailable; it is
 not a Python package. Then run from this repository:
@@ -153,7 +168,7 @@ costs and timeout/retry latency. The Agent response reports zero ranking tokens;
 it does not aggregate embedding or State-model usage. Do not
 interpret zero reported tokens in an API-enabled run as zero provider usage.
 
-## Local verification
+## 📊 Local verification
 
 The official local evaluator and public 200 sessions are retained for
 acceptance checks. The files in `evaluator/` match the official repository
@@ -178,7 +193,7 @@ The organizer's evaluator tests are also retained:
 python -c "import os, runpy; os.environ['DASHSCOPE_API_KEY']=''; runpy.run_module('unittest', run_name='__main__')" tests.test_evaluator
 ~~~
 
-## Presentation frontend
+## 🖥️ Presentation frontend
 
 The frontend is optional and is not imported by the Agent or evaluator.
 After preparing the catalog, install its dependencies and start the local
@@ -216,7 +231,7 @@ public deployment.
 The HTTP chat endpoints (`POST /api/session`, `POST /api/chat`) remain
 available; the presentation UI uses the evaluator-driven flow above.
 
-## Submission files
+## 🗂️ Submission files
 
 | Path | Purpose |
 |---|---|
@@ -243,7 +258,7 @@ are ignored by Git. Only the three production cache files are allowed under
 `artifacts/`; other experiment outputs and caches remain ignored. The
 matrix uses Git LFS, while both metadata files use ordinary Git.
 
-## Data attribution
+## 🙏 Data attribution
 
 The catalog is derived from **Amazon Reviews 2023**, McAuley Lab, UCSD,
 category `Clothing_Shoes_and_Jewelry`; products are joined by `parent_asin`.

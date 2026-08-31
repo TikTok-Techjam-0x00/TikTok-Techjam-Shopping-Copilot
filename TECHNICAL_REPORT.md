@@ -1,11 +1,23 @@
 # Technical Report
 
+> 🧠 From conversation State to evidence-aware recommendations—one turn at a
+> time.
+
+[![System](https://img.shields.io/badge/System-sota--2.2-4f46e5?style=flat-square)](README.md)
+![Public Sessions](https://img.shields.io/badge/Public_Sessions-200-2563eb?style=flat-square)
+![HitRate@10](https://img.shields.io/badge/HitRate%4010-0.995-059669?style=flat-square)
+![MRR](https://img.shields.io/badge/MRR-0.960833-059669?style=flat-square)
+![MTTC](https://img.shields.io/badge/MTTC-2.23-f59e0b?style=flat-square)
+
+[🏠 Back to README](README.md) · [📊 Jump to Results](#-6-evaluation-results) ·
+[⚠️ Jump to Limitations](#️-8-limitations)
+
 This report describes the implementation shipped in this repository. It focuses
 on what the Agent does on every conversation turn and how its components react
 to changes in shopping intent and constraints. Algorithmic derivations are kept
 brief; the corresponding source files are linked where useful.
 
-## 1. Problem
+## 🎯 1. Problem
 
 The Agent receives a user profile and a conversation of at most ten turns. On
 each turn it must return:
@@ -29,7 +41,7 @@ The implementation is designed around three practical goals:
 3. explore new candidates in later turns instead of repeating an exhausted
    first page.
 
-## 2. System Architecture
+## 🏗️ 2. System Architecture
 
 The official entry point is `starter.agent.Agent`. It owns one `Pipeline`, and
 the Pipeline stores an isolated `ShoppingState` and recommendation memory for
@@ -86,9 +98,9 @@ Catalog loading and index construction happen when the Agent is initialized.
 Conversation state is then mutated only within its session ID; one user's
 preferences cannot enter another user's State.
 
-## 3. State & Intent Management
+## 🧠 3. State & Intent Management
 
-### 3.1 State representation
+### 3.1 🧾 State representation
 
 `ShoppingState` records:
 
@@ -105,7 +117,7 @@ preferences cannot enter another user's State.
 The canonical attributes are `category`, `material`, `color`, `size`, `style`,
 `brand`, `budget`, `feature`, `use_case`, and `other`.
 
-### 3.2 What happens on each turn
+### 3.2 🔄 What happens on each turn
 
 For every message, the State manager performs the following sequence:
 
@@ -129,7 +141,7 @@ The optional Qwen path is therefore a bounded fallback for ambiguity, not the
 primary ranking mechanism. With no `DASHSCOPE_API_KEY`, all State updates remain
 local and rule-based.
 
-### 3.3 Responses to different State changes
+### 3.3 🧭 Responses to different State changes
 
 | State event | Concrete system response |
 |---|---|
@@ -151,7 +163,7 @@ records available for diagnostics, while retrieval excludes stale soft
 preferences from earlier epochs. This separates audit history from active
 ranking context.
 
-### 3.4 Query construction from State
+### 3.4 🔎 Query construction from State
 
 After the update, Retrieval builds a fresh lexical query from active State
 rather than concatenating the whole conversation. Category terms receive first
@@ -163,9 +175,9 @@ Only when State contains no useful values does the current user message become
 the fallback query. CJK text is removed before keyword or Dense retrieval
 because the released catalog and evaluation constraints are English.
 
-## 4. Retrieval and Reranking
+## 🔍 4. Retrieval and Reranking
 
-### 4.1 Retrieval on every turn
+### 4.1 📚 Retrieval on every turn
 
 The primary retriever is SQLite FTS5 BM25 over structured product fields. It
 uses separate weight profiles:
@@ -199,7 +211,7 @@ controlled breadth. If `retrieval_pool_size` is configured above 100, the
 Pipeline instead retrieves that larger first page, removes already shown
 products, and takes the first 100 remaining candidates.
 
-### 4.2 Optional Dense residual
+### 4.2 🧬 Optional Dense residual
 
 Dense retrieval is used only when all of the following are available:
 
@@ -215,7 +227,7 @@ matches from displacing the established BM25 head. Missing files, incompatible
 metadata, provider errors, or absent credentials produce an automatic BM25-only
 fallback.
 
-### 4.3 Evidence Coverage Reranker
+### 4.3 🏆 Evidence Coverage Reranker
 
 Retrieval answers “which products are plausible?” The Reranker answers “which
 of these candidates best supports everything the user has disclosed?” It
@@ -247,12 +259,12 @@ only the strongest unseen product; from turn 3 onward, up to the requested
 as implicit negative feedback for previously displayed products without
 rewriting the user's explicit constraints.
 
-## 5. Clarification Strategy
+## 💬 5. Clarification Strategy
 
 Clarification is computed after Retrieval and Reranking on every turn, and a
 question is returned alongside the current recommendations.
 
-### 5.1 First three turns
+### 5.1 🌱 First three turns
 
 Turns 1–3 intentionally use open questions with `ask_attribute="other"`:
 
@@ -266,7 +278,7 @@ and 2: the system avoids spending all Top-10 slots before the user has revealed
 the missing requirements. Turn 3 already returns up to `top_k` while asking the
 last open question.
 
-### 5.2 What happens after turn 3
+### 5.2 🎛️ What happens after turn 3
 
 Turns 4–9 switch to the attribute-specific 3B policy; they do **not** stop
 clarifying immediately. The selector first excludes attributes that are already
@@ -291,7 +303,7 @@ questions relevant to the new shopping goal can be asked again. Turn 10 returns
 recommendations only: `ask_attribute` is `null`, and no further clarification
 is attempted.
 
-## 6. Evaluation Results
+## 📊 6. Evaluation Results
 
 The official evaluator uses 200 public sessions, exact `parent_asin` matching,
 `top_k=10`, a maximum of ten turns, and a miss value of 11 turns. Metrics are:
@@ -315,7 +327,7 @@ The production value is the repository's documented Public-200 reference run;
 it is not a claim about hidden-test performance. Reproduction commands and data
 preparation checks are provided in `README.md`.
 
-## 7. Runtime, Token Usage and Cost
+## ⚡ 7. Runtime, Token Usage and Cost
 
 The no-key Public-200 run takes about 51 seconds including initialization on the
 documented local validation setup. This is a reproducibility observation, not a
@@ -335,7 +347,7 @@ run must not be interpreted as zero external usage. Actual API cost depends on
 the configured provider, model prices, number of ambiguous State turns, and
 whether turn 8 reaches the Dense path.
 
-## 8. Limitations
+## ⚠️ 8. Limitations
 
 - The deterministic slot and intent rules cover common English shopping
   language but can miss unusual paraphrases, long-range references, sarcasm,
