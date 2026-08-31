@@ -9,7 +9,17 @@ __pycache__/
 !.env.example
 results.json
 results_history/
-artifacts/
+# Ignore generated artifacts except the three shipped production cache files.
+/artifacts/*
+!/artifacts/retrieval/
+/artifacts/retrieval/*
+!/artifacts/retrieval/dense/
+/artifacts/retrieval/dense/*
+!/artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/
+/artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/*
+!/artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/embeddings.npy
+!/artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/manifest.json
+!/artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/parent_asins.json
 results-*.json
 data/catalog.jsonl
 data/catalog.jsonl.gz

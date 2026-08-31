@@ -1,2 +1,7 @@
+# Complete Demo + Developer Mode installation, including the core Agent.
+-r ../requirements.txt
+
 fastapi>=0.115,<1.0
+# Imported directly by frontend/server.py for HTTP request validation.
+pydantic>=2.0,<3.0
 uvicorn[standard]>=0.30,<1.0

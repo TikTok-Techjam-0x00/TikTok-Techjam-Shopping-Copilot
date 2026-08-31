@@ -1,5 +1,8 @@
-# Generated catalog embeddings are large binary matrices. Keep them out of
-# normal Git objects while making the tested caches available to teammates.
-artifacts/retrieval/dense/**/embeddings.npy filter=lfs diff=lfs merge=lfs -text
-artifacts/retrieval/dense/**/manifest.json text eol=lf
-artifacts/retrieval/dense/**/parent_asins.json text eol=lf
+# Only the production needs-vector matrix uses Git LFS.
+artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/embeddings.npy filter=lfs diff=lfs merge=lfs -text
+# Small cache metadata remains ordinary Git text, with stable line endings.
+artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/manifest.json text eol=lf
+artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/parent_asins.json text eol=lf
+
+# Preserve the official evaluator's upstream bytes on Windows as well.
+evaluator/*.py text eol=lf

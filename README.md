@@ -29,8 +29,18 @@ turns. The Agent never receives target labels or hidden intent cards.
 
 ## Installation and catalog
 
-Python 3.10+ is supported; local validation used Python 3.11.4.
-Run commands from the repository root.
+Use Python 3.10+ with SQLite FTS5 support; local validation used Python
+3.11.4. SQLite is supplied by Python, not installed from `requirements.txt`.
+Run commands from the repository root after cloning:
+
+~~~bash
+git clone https://github.com/TikTok-Techjam-0x00/TikTok-Techjam-Shopping-Copilot.git
+cd TikTok-Techjam-Shopping-Copilot
+~~~
+
+Git LFS is only needed for the optional vector cache described below.
+Clone may download that cache automatically if Git LFS is already configured;
+set `GIT_LFS_SKIP_SMUDGE=1` in your shell before cloning to skip the download.
 
 ~~~bash
 python -m venv .venv
@@ -41,7 +51,17 @@ Activate with `.venv\Scripts\Activate.ps1` on Windows or
 
 ~~~bash
 python -m pip install -r requirements.txt
+python -m pip check
 ~~~
+
+The core dependencies are `numpy` (retrieval vectors), `openai` (optional
+State/query-embedding API clients), and `python-dotenv` (configuration).
+The OpenAI SDK remains necessary for API-enabled modes even though ranking
+is local. The official evaluator adds no third-party dependencies beyond
+the Agent. These are compatibility ranges, not a fully pinned environment;
+Python 3.11.4 validation used NumPy 2.4.6, OpenAI 2.54.0, and python-dotenv
+1.2.3. For the complete frontend, install `frontend/requirements.txt`
+instead; it includes the core requirements.
 
 Download `catalog.jsonl.gz` from the
 [official Participant Kit release](https://github.com/TechJam2026/techjam-conversational-search/releases/tag/participantkit).
@@ -86,15 +106,31 @@ A local `.env` or process environment can change the execution path. Copy
 `.env.example` only when intentionally enabling external services. Never
 commit a real API key.
 
-For Dense, retrieve the only shipped vector cache:
+### Optional Git LFS vector cache
+
+Install the Git LFS system tool if `git lfs version` is unavailable; it is
+not a Python package. Then run from this repository:
 
 ~~~bash
-git lfs pull --include="artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/embeddings.npy"
+git lfs version
+git lfs install --local
+git lfs pull --include="artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/embeddings.npy" --exclude="" origin
+git lfs ls-files
 ~~~
 
-The cache contains `embeddings.npy`, `manifest.json`, and
-`parent_asins.json`: `text-embedding-v4`, `dense_needs_v1`, 256 dimensions.
-A Git LFS pointer alone is not a usable matrix. On turn 8, semantic candidates
+Only `embeddings.npy` uses LFS (51,200,128 bytes, about 48.8 MiB).
+Its companion `manifest.json` and `parent_asins.json` are ordinary Git files.
+The cache is `text-embedding-v4`, `dense_needs_v1`, 50,000 products by
+256 dimensions; no Hybrid or MultiVector caches are needed. Verify the
+downloaded matrix without API access:
+
+~~~bash
+python -c "import numpy as np; a=np.load('artifacts/retrieval/dense/text-embedding-v4__dense_needs_v1__d256/embeddings.npy', mmap_mode='r', allow_pickle=False); assert a.shape == (50000, 256) and a.dtype == np.float32; print('Vector cache OK:', a.shape, a.dtype)"
+~~~
+
+A Git LFS pointer alone is not a usable matrix. A source ZIP may contain
+only that pointer; use a Git clone plus the LFS pull above for Dense.
+The catalog is a separate official download, not an LFS object. On turn 8, semantic candidates
 must also be supported by deeper BM25 ranks. Missing/incompatible cache,
 credentials, or a Dense provider error falls back to BM25.
 
@@ -116,8 +152,8 @@ interpret zero reported tokens in an API-enabled run as zero provider usage.
 ## Local verification
 
 The official local evaluator and public 200 sessions are retained for
-acceptance checks. The evaluator has local progress-display and `--limit`
-CLI additions; its simulation and scoring logic are unchanged.
+acceptance checks. The files in `evaluator/` match the official repository
+at commit `9c9e7c9` exactly, without local progress-display or CLI extensions.
 Run without API access:
 
 ~~~bash
@@ -125,7 +161,8 @@ python -c "from pathlib import Path; Path('artifacts/validation').mkdir(parents=
 python -c "import os, runpy; os.environ['DASHSCOPE_API_KEY']=''; runpy.run_module('evaluator.local_evaluator', run_name='__main__')" --output artifacts/validation/public200.json
 ~~~
 
-Use `--limit 4` for a smoke test. Output is ignored by Git.
+Output is ignored by Git. The official CLI accepts `--catalog`, `--dataset`,
+and `--output`; it has no `--limit` option or progress bar.
 No-key Public-200 reference: **TechnicalScore 0.961150**, **HitRate@10
 0.995000**, **MRR 0.960833**, **MTTC 2.23000**. Local full-run time is about
 51 seconds including initialization; this is not a controlled latency
@@ -146,8 +183,13 @@ as the reference evaluation:
 
 ~~~bash
 python -m pip install -r frontend/requirements.txt
+python -m pip check
 python -c "import os, uvicorn; os.environ['DASHSCOPE_API_KEY']=''; uvicorn.run('frontend.server:app', host='127.0.0.1', port=8000)"
 ~~~
+
+This installs the Agent dependencies plus FastAPI, Pydantic, and
+Uvicorn with its standard server extras. The no-key Agent/evaluator does
+not need these frontend packages.
 
 Open `http://127.0.0.1:8000`. The Agent, product-detail adapter, and Developer
 Mode share one catalog. The production indexes are built at startup; the
@@ -182,6 +224,8 @@ available; the presentation UI uses the evaluator-driven flow above.
 | `src/dialogue/` | Clarification decisions |
 | `src/item.py`, `src/attribute.py` | Shared product and attribute contracts |
 | `requirements.txt`, `.env.example` | Installation and optional service configuration |
+| `frontend/requirements.txt` | Complete frontend installation, including the core requirements |
+| `.gitattributes`, `.gitignore` | Track only the shipped matrix with LFS; exclude generated artifacts |
 | `scripts/prepare_catalog.py` | Local catalog preparation |
 | `artifacts/retrieval/dense/*dense_needs_v1*/` | Optional SOTA 2.2 vector cache |
 | `frontend/` | Demo UI, HTTP adapter, and component inspector |
@@ -191,8 +235,9 @@ available; the presentation UI uses the evaluator-driven flow above.
 | `data/README.md`, `DATA_ATTRIBUTION.md` | Data instructions and attribution |
 
 The downloaded catalog, local environment, and generated evaluation outputs
-are ignored by Git. The retained vector-cache files are already tracked;
-the matrix is stored with Git LFS.
+are ignored by Git. Only the three production cache files are allowed under
+`artifacts/`; other experiment outputs and caches remain ignored. The
+matrix uses Git LFS, while both metadata files use ordinary Git.
 
 ## Data attribution
 

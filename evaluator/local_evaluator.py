@@ -5,7 +5,6 @@ import json
 import random
 import re
 import statistics
-import sys
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -220,14 +219,11 @@ def evaluate(
     catalog_ids: set[str],
     categories: dict[str, list[str]],
     products: dict[str, dict],
-    *,
-    show_progress: bool = False,
 ) -> dict:
     sessions: list[dict] = []
     total_prompt_tokens = 0
     total_completion_tokens = 0
-    sample_count = len(samples)
-    for sample_index, sample in enumerate(samples, start=1):
+    for sample in samples:
         session_id = f"public_{uuid.uuid4().hex}"
         agent.reset(session_id, sample["user_profile"])
         target = str(sample["ground_truth"]["parent_asin"])
@@ -240,17 +236,6 @@ def evaluate(
         hit_turn: int | None = None
         best_rank: int | None = None
         for turn in range(1, MAX_TURNS + 1):
-            if show_progress:
-                completed = sample_index - 1
-                width = 30
-                filled = int(width * completed / max(sample_count, 1))
-                bar = "#" * filled + "-" * (width - filled)
-                sys.stderr.write(
-                    f"\rEvaluator [{bar}] {completed}/{sample_count} "
-                    f"({100 * completed / max(sample_count, 1):5.1f}%) "
-                    f"sample={sample.get('sample_id', sample_index)} turn={turn}/{MAX_TURNS}"
-                )
-                sys.stderr.flush()
             try:
                 response = agent.respond(session_id, user_message, turn, TOP_K)
             except Exception:
@@ -289,10 +274,6 @@ def evaluate(
             "best_rank": best_rank,
             "reciprocal_rank": 0.0 if best_rank is None else 1.0 / best_rank,
         })
-    if show_progress:
-        bar = "#" * 30
-        sys.stderr.write(f"\rEvaluator [{bar}] {sample_count}/{sample_count} (100.0%) complete\n")
-        sys.stderr.flush()
 
     overall = metric_summary(sessions)
     efficiency = max(0.0, min(1.0, (11.0 - float(overall["mttc"])) / 10.0))
@@ -319,22 +300,10 @@ def main() -> None:
     parser.add_argument("--catalog", default="data/catalog.jsonl")
     parser.add_argument("--dataset", default="data/public_set.jsonl")
     parser.add_argument("--output", default="results.json")
-    parser.add_argument("--limit", type=int, default=None, help="Evaluate only the first N samples")
     args = parser.parse_args()
     samples = load_jsonl(args.dataset)
-    if args.limit is not None:
-        if args.limit < 1:
-            parser.error("--limit must be at least 1")
-        samples = samples[:args.limit]
     catalog_ids, categories, products = catalog_index(args.catalog)
-    result = evaluate(
-        Agent(args.catalog),
-        samples,
-        catalog_ids,
-        categories,
-        products,
-        show_progress=True,
-    )
+    result = evaluate(Agent(args.catalog), samples, catalog_ids, categories, products)
     Path(args.output).write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({key: value for key, value in result.items() if key != "sessions"}, indent=2))
 

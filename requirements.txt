@@ -1,5 +1,12 @@
-# Agent runtime dependencies, including optional Qwen/DashScope access.
+# Core Agent and official local evaluator (Python 3.10+).
+# The frontend installer includes this file; Git LFS is a separate system tool.
+
+# Dense matrix loading and vector operations; imported by the retrieval package.
 numpy>=1.26,<3.0
+
+# Still used by optional Qwen State resolution and query embeddings, not ranking.
 openai>=1.40,<3.0
+
+# Read optional runtime configuration from .env.
 python-dotenv>=1.0,<2.0
 
