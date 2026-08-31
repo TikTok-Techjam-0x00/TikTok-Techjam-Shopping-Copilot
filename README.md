@@ -1,3 +1,5 @@
+![0x00 Shopping Copilot — architecture, sample conversation, and Public-200 results](docs/49445d914dab6319a4303372395713f5.png)
+
 # TikTok TechJam Shopping Copilot
 
 > 🛒 **Understand deeply. Search widely. Recommend precisely.**
