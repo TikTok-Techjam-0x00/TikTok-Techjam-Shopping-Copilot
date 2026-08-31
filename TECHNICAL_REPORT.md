@@ -330,23 +330,50 @@ preparation checks are provided in `README.md`.
 
 ## ⚡ 7. Runtime, Token Usage and Cost
 
-The no-key Public-200 run takes about 51 seconds including initialization on the
-documented local validation setup. This is a reproducibility observation, not a
-controlled per-request latency benchmark.
+Two complete Public-200 runs were measured, including Agent initialization. The
+offline reference took about 51 seconds. A fresh-clone API-enabled audit on
+2026-08-31 used Python 3.11.9, the shipped 50,000 x 256 LFS vector cache, and
+the default Singapore DashScope endpoints; it took about 58 seconds.
 
-| Mode | Network during evaluation | Reported model tokens | Direct model cost |
+| Mode | Network during evaluation | Provider-observed token usage | Approximate direct model cost |
 |---|---|---:|---:|
-| No API key | None after installation/data preparation | 0 | 0 |
-| API key, no compatible Dense cache | Optional Qwen State calls | 0 in current response counter | Provider-dependent |
-| API key and compatible Dense cache | Optional Qwen State calls and turn-8 query embedding | 0 in current response counter | Provider-dependent |
+| No API key | None after installation/data preparation | 0 | USD 0 |
+| API key and compatible Dense cache | Two `qwen-plus` State calls and one turn-8 `text-embedding-v4` query call | 2,098 input + 273 output = 2,371 | USD 0.001136 |
+
+The API-enabled audit measured the two models separately:
+
+- `qwen-plus`: 2 calls, 2,005 input tokens and 273 output tokens;
+- `text-embedding-v4` (256 dimensions, `text_type=query`): 1 call and 93
+  input tokens, with no completion tokens.
+
+The cost estimate uses the Singapore list prices available on 2026-08-31:
+USD 0.40 per million input tokens and USD 1.20 per million output tokens for
+non-thinking `qwen-plus`, plus USD 0.07 per million input tokens for
+`text-embedding-v4`. Free quotas and promotions are excluded. The estimate also
+excludes the historical one-time cost of building the reusable 50,000-product
+embedding cache because catalog embeddings are not regenerated during
+evaluation. Pricing references are the Alibaba Cloud Model Studio
+[`qwen-plus` pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing)
+and [`text-embedding-v4` API documentation](https://www.alibabacloud.com/help/en/model-studio/text-embedding-synchronous-api).
+
+The API-enabled run produced exactly the same Public-200 metrics as the offline
+reference: HitRate@10 0.995000, MRR 0.960833, MTTC 2.23000, and TechnicalScore
+0.961150. All 200 session-level hit outcomes, first-hit turns, and best ranks
+were also unchanged. The optional calls therefore added no Public-200 score
+gain in this run, although the frozen SOTA 2.2 generalization study records two
+additional hits on IID-800.
 
 BM25, Evidence Coverage Reranking, and clarification are local and consume no
-model tokens. The response currently reports `prompt_tokens=0` and
-`completion_tokens=0` because it does not aggregate usage from optional State
-or embedding providers. Therefore zero **reported** tokens in an API-enabled
-run must not be interpreted as zero external usage. Actual API cost depends on
-the configured provider, model prices, number of ambiguous State turns, and
-whether turn 8 reaches the Dense path.
+model tokens. The current Agent response still emits `prompt_tokens=0` and
+`completion_tokens=0`; the figures above were captured from provider `usage`
+responses by separate metadata-only audit instrumentation without modifying the
+official evaluator or model outputs.
+
+The submission does not require network access for its reliable default path.
+If credentials, the compatible vector cache, network access, or the provider
+are unavailable, it automatically falls back to local BM25. The offline path
+requires neither model calls nor the optional LFS vectors after installation
+and catalog preparation.
 
 ## ⚠️ 8. Limitations
 
@@ -369,11 +396,10 @@ whether turn 8 reaches the Dense path.
 - Recommendation memory treats continued conversation as implicit rejection.
   A user who still likes an earlier product but asks an unrelated question may
   not see it again until an override starts a new epoch.
-- The runtime figure is end-to-end for one local reference run and does not
-  separate index construction, per-turn latency, or API latency.
-- Optional provider token usage and monetary cost are not yet collected in the
-  Agent's `usage` response, so API-enabled cost disclosure requires provider
-  logs.
+- The runtime figures are end-to-end local observations and do not separate
+  index construction, per-turn latency, or API latency.
+- Optional provider token usage is disclosed from the measured audit but is not
+  yet aggregated into the Agent's response-level `usage` field.
 - Public-set performance can guide engineering but does not guarantee the same
   result on hidden sessions or future catalog versions.
 
