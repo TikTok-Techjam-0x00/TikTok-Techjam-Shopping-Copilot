@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.dialogue import decide_high_information_ask, record_asked_attribute
-from src.reranking import recommendations_from_ranking
-from src.reranking_plugins import QwenReranker
-from src.retrieval import Retriever
+from src.reranking import EvidenceCoverageReranker, recommendations_from_ranking
+from src.retrieval import Catalog, Retriever
 from src.state import (
     ShoppingState,
     SemanticPolicy,
@@ -24,6 +23,7 @@ class Pipeline:
         self,
         catalog_path: str | Path,
         *,
+        catalog: Catalog | None = None,
         semantic_resolver: SemanticResolver | None = None,
         semantic_policy: SemanticPolicy | None = None,
         retrieval_pool_size: int = 100,
@@ -33,21 +33,20 @@ class Pipeline:
         if retrieval_pool_size < 100:
             raise ValueError("retrieval_pool_size must be at least 100")
         self.catalog_path = Path(catalog_path)
-        self.retriever = Retriever.sota_semantic_residual(str(self.catalog_path))
-        self.reranker = QwenReranker(use_local_fallback=True)
+        self.catalog = catalog if catalog is not None else Catalog.load(self.catalog_path)
+        self.retriever = Retriever.sota_semantic_residual(self.catalog)
+        self.reranker = EvidenceCoverageReranker()
         self.semantic_resolver = semantic_resolver
         self.semantic_policy = semantic_policy
         self.retrieval_pool_size = retrieval_pool_size
         self._sessions: dict[str, ShoppingState] = {}
         self._last_asked: dict[str, str | None] = {}
-        self._conversations: dict[str, list[dict[str, str]]] = {}
         self._recommended_asins: dict[str, set[str]] = {}
         self._recommendation_epoch: dict[str, int] = {}
 
     def reset(self, session_id: str, user_profile: dict) -> None:
         self._sessions[session_id] = create_state(session_id, user_profile)
         self._last_asked[session_id] = None
-        self._conversations[session_id] = []
         self._recommended_asins[session_id] = set()
         self._recommendation_epoch[session_id] = 0
 
@@ -59,9 +58,6 @@ class Pipeline:
     def respond(self, session_id: str, user_message: str, turn: int, top_k: int) -> dict:
         if session_id not in self._sessions:
             raise RuntimeError("reset must be called before respond")
-
-        conversation = self._conversations[session_id]
-        conversation.append({"role": "user", "content": user_message})
 
         state = update_state(
             self._sessions[session_id],
@@ -109,7 +105,7 @@ class Pipeline:
                 windows=((0, 50), (400, 50)),
             )
         else:
-            retrieval_page = {7: 1, 8: 2, 10: 3}.get(turn, 0)
+            retrieval_page = {7: 1, 10: 3}.get(turn, 0)
             candidates_100 = self.retriever.retrieve_page(
                 query,
                 state=state,
@@ -117,9 +113,6 @@ class Pipeline:
                 page=retrieval_page,
                 page_size=100,
             )
-        conversation_setter = getattr(self.reranker, "set_conversation", None)
-        if callable(conversation_setter):
-            conversation_setter(conversation)
         # A continued conversation is implicit negative feedback for products
         # already shown under the current intent. Keep the strongest ordering,
         # but avoid spending later recommendation slots on exact repeats. An
@@ -129,23 +122,7 @@ class Pipeline:
         # turns, expose only the strongest unseen candidate; a wrong Top 1 lets
         # the conversation continue and collect the missing requirements.
         recommendation_k = 1 if turn <= 2 else top_k
-        local_fallback = getattr(self.reranker, "local_fallback", None)
-        rank_all = getattr(local_fallback, "rank_all", None)
-        if callable(rank_all):
-            ranked_all = rank_all(
-                state,
-                candidates_100,
-            )
-        else:
-            requested_k = min(
-                100,
-                recommendation_k + len(previously_shown),
-            )
-            ranked_all = self.reranker.rerank(
-                state,
-                candidates_100,
-                top_k=requested_k,
-            )
+        ranked_all = self.reranker.rank_all(state, candidates_100)
         candidates_10 = [
             candidate
             for candidate in ranked_all
@@ -159,7 +136,6 @@ class Pipeline:
         record_asked_attribute(state, ask_attribute)
         self._last_asked[session_id] = ask_attribute
         agent_message = decision["message"] or "Here are the closest matches I found."
-        conversation.append({"role": "assistant", "content": agent_message})
 
         return {
             "message": agent_message,
@@ -169,7 +145,9 @@ class Pipeline:
                 recommendation_k,
             ),
             "usage": {
-                "prompt_tokens": int(getattr(self.reranker, "last_prompt_tokens", 0) or 0),
-                "completion_tokens": int(getattr(self.reranker, "last_completion_tokens", 0) or 0),
+                # Local ranking uses no model tokens. Optional State/embedding
+                # calls are not included in this existing response counter.
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
             },
         }

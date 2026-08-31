@@ -12,7 +12,7 @@ from typing import Any
 
 from src.dialogue import decide_ask, record_asked_attribute
 from src.reranking import SimpleReranker, recommendations_from_ranking
-from src.retrieval import Retriever
+from src.retrieval import Catalog, Retriever
 from src.state import (
     ShoppingState,
     create_state,
@@ -77,11 +77,19 @@ class DeveloperSession:
 class TraceRunner:
     """Execute existing pipeline components once per stage and retain traces."""
 
-    def __init__(self, catalog_path: str | Path) -> None:
-        self.catalog_path = Path(catalog_path)
-        self.retriever = Retriever.bm25(str(self.catalog_path))
+    def __init__(self, catalog: Catalog | str | Path) -> None:
+        # Share immutable-by-convention products, never session/trace state.
+        self.catalog = catalog if isinstance(catalog, Catalog) else Catalog.load(catalog)
+        self._retriever: Retriever | None = None
         self.reranker = SimpleReranker()
         self.sessions: dict[str, DeveloperSession] = {}
+
+    @property
+    def retriever(self) -> Retriever:
+        """Build the developer-only index on first use in the server thread."""
+        if self._retriever is None:
+            self._retriever = Retriever.bm25(self.catalog)
+        return self._retriever
 
     def create_session(self, user_profile: dict[str, Any] | None = None) -> dict[str, Any]:
         profile = dict(user_profile or {})
@@ -344,8 +352,11 @@ class TraceRunner:
                 "turn": trace.turn,
                 "top_k": trace.top_k,
                 "retrieval_k": trace.retrieval_k,
-                "catalog_path": str(self.catalog_path),
-                "retriever_type": type(self.retriever.strategy).__name__,
+                "catalog_path": str(self.catalog.source) if self.catalog.source else None,
+                "retriever_type": (
+                    type(self._retriever.strategy).__name__
+                    if self._retriever is not None else "BM25Retriever"
+                ),
                 "reranker_type": type(self.reranker).__name__,
             },
         }

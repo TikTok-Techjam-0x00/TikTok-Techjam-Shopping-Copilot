@@ -1,11 +1,9 @@
 # TikTok TechJam Shopping Copilot
 
 Team 0x00's final Agent for TechJam 2026 Track 4, based on `sota-2.2`
-(`d5ac6e9`). The production algorithm is unchanged by repository cleanup.
+(`d5ac6e9`).
 This submission keeps the core Agent, the presentation frontend, and the
-official participant evaluation toolkit and documents. Team experiment
-frameworks, historical results, custom datasets, development utilities,
-module-level documents, and team-authored tests are no longer shipped.
+official participant evaluation toolkit and documents.
 
 ## Agent entry point
 
@@ -63,9 +61,8 @@ It does not download data. The full upstream Amazon dataset is not needed.
    no-preference fields, rejected values, and the current constraint epoch.
 2. **Retrieval:** use intent-routed, field-weighted BM25, with deeper rank
    windows in late turns and an optional turn-8 semantic residual.
-3. **Ranking:** apply the local `EvidenceCoverageReranker` to product
-   evidence. The existing Qwen wrapper supplies this local ranker; live
-   Qwen reranking is not the normal production path.
+3. **Ranking:** apply `EvidenceCoverageReranker` directly to product evidence.
+   Ranking is local and does not call an LLM.
 4. **Dialogue:** ask clarification questions while returning recommendations.
    Turns 1-2 expose one product each; later turns expose up to `top_k`.
    Already-shown products are skipped within an epoch; an override resets
@@ -112,8 +109,8 @@ from starter.agent import Agent
 ~~~
 
 Optional embedding and State calls require network access and may incur
-costs and timeout/retry latency. The current Agent token counters report only
-reranker usage; they do not aggregate embedding or State-model usage. Do not
+costs and timeout/retry latency. The Agent response reports zero ranking tokens;
+it does not aggregate embedding or State-model usage. Do not
 interpret zero reported tokens in an API-enabled run as zero provider usage.
 
 ## Local verification
@@ -152,7 +149,9 @@ python -m pip install -r frontend/requirements.txt
 python -c "import os, uvicorn; os.environ['DASHSCOPE_API_KEY']=''; uvicorn.run('frontend.server:app', host='127.0.0.1', port=8000)"
 ~~~
 
-Open `http://127.0.0.1:8000`. Startup loads the catalog and retrieval indexes.
+Open `http://127.0.0.1:8000`. The Agent, product-detail adapter, and Developer
+Mode share one catalog. The production indexes are built at startup; the
+developer-only BM25 index is built on its first retrieval step.
 
 - **Demo Mode:** uses the production `starter.Agent`. Select a public sample,
   then use **Start Sample**, **Next Turn**, or **Auto Run**. The evaluator
@@ -168,6 +167,9 @@ Demo and developer sessions are separate, stored in memory, and lost when
 the server restarts. The local server is intended for presentation, not
 public deployment.
 
+The HTTP chat endpoints (`POST /api/session`, `POST /api/chat`) remain
+available; the presentation UI uses the evaluator-driven flow above.
+
 ## Submission files
 
 | Path | Purpose |
@@ -176,7 +178,7 @@ public deployment.
 | `src/pipeline/` | Production orchestration |
 | `src/state/` | State and optional semantic resolution |
 | `src/retrieval/` | Retrieval and vector-cache support |
-| `src/reranking/`, `src/reranking_plugins/` | Ranking and imported compatibility helpers |
+| `src/reranking/` | Evidence Coverage ranking and the developer inspector's rule-based ranker |
 | `src/dialogue/` | Clarification decisions |
 | `src/item.py`, `src/attribute.py` | Shared product and attribute contracts |
 | `requirements.txt`, `.env.example` | Installation and optional service configuration |
@@ -190,8 +192,7 @@ public deployment.
 
 The downloaded catalog, local environment, and generated evaluation outputs
 are ignored by Git. The retained vector-cache files are already tracked;
-the matrix is stored with Git LFS. Removed development material remains
-recoverable from repository history and is not needed to run this submission.
+the matrix is stored with Git LFS.
 
 ## Data attribution
 

@@ -24,8 +24,7 @@ def json_safe(value: Any) -> Any:
     return str(value)
 
 
-def candidate_view(candidate: Any) -> dict[str, Any]:
-    raw = json_safe(candidate)
+def _candidate_fields(candidate: Any, raw: dict[str, Any]) -> dict[str, Any]:
     item = raw.get("item", {}) if isinstance(raw, dict) else {}
     return {
         "parent_asin": item.get("parent_asin", getattr(candidate, "parent_asin", "")),
@@ -37,16 +36,14 @@ def candidate_view(candidate: Any) -> dict[str, Any]:
     }
 
 
+def candidate_view(candidate: Any) -> dict[str, Any]:
+    return _candidate_fields(candidate, json_safe(candidate))
+
+
 def ranked_candidate_view(candidate: Any) -> dict[str, Any]:
     raw = json_safe(candidate)
-    item = raw.get("item", {}) if isinstance(raw, dict) else {}
     return {
-        "parent_asin": item.get("parent_asin", getattr(candidate, "parent_asin", "")),
-        "product": item,
-        "bm25_score": raw.get("bm25_score"),
-        "dense_score": raw.get("dense_score"),
-        "retrieval_score": raw.get("retrieval_score"),
-        "retrieval_rank": raw.get("retrieval_rank"),
+        **_candidate_fields(candidate, raw),
         "rerank_score": raw.get("rerank_score"),
         "rerank_rank": raw.get("rerank_rank"),
         "matched": raw.get("matched", []),

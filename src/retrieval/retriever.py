@@ -1,19 +1,14 @@
-"""Stable Retrieval facade used by integration and future hybrid strategies."""
+"""Retrieval facade for BM25 routing and optional semantic residuals."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from ..item import Candidates100
 from .bm25 import BM25Retriever, BM25Weights
 from .catalog import Catalog
 from .text import DEFAULT_TEXT_VERSION, ProductTextConfig
-
-if TYPE_CHECKING:
-    from .embedding import EmbeddingEncoder
-    from .hybrid import HybridConfig
-
 
 # Buying keeps the strong identity/constraint columns while reducing noisy
 # merchant and long-description matches.  The Browsing warm start favors the
@@ -49,7 +44,7 @@ class RetrievalStrategy(Protocol):
 
 
 class Retriever:
-    """Small replaceable facade for lexical, dense, and hybrid strategies."""
+    """Shared retrieval entry points for the production Agent and frontend."""
 
     def __init__(self, strategy: RetrievalStrategy) -> None:
         self.strategy = strategy
@@ -57,7 +52,7 @@ class Retriever:
     @classmethod
     def bm25(
         cls,
-        catalog_path: str,
+        catalog_path: Catalog | str | Path,
         *,
         weights: BM25Weights | None = None,
         text_version: str | ProductTextConfig = DEFAULT_TEXT_VERSION,
@@ -71,33 +66,9 @@ class Retriever:
         )
 
     @classmethod
-    def dense(
-        cls,
-        catalog_path: str,
-        encoder: EmbeddingEncoder,
-        cache_dir: str | Path,
-        *,
-        text_version: str = DEFAULT_TEXT_VERSION,
-        query_embedding_mode: str = "query_instruction",
-        query_instruction: str | None = None,
-    ) -> Retriever:
-        from .dense import DenseRetriever
-
-        return cls(
-            DenseRetriever(
-                catalog_path,
-                encoder,
-                cache_dir,
-                text_version=text_version,
-                query_embedding_mode=query_embedding_mode,
-                query_instruction=query_instruction,
-            )
-        )
-
-    @classmethod
     def bm25_intent_routed(
         cls,
-        catalog_path: str,
+        catalog_path: Catalog | str | Path,
         *,
         buying_text_version: str | ProductTextConfig = DEFAULT_TEXT_VERSION,
         browsing_text_version: str | ProductTextConfig = "title_category_v1",
@@ -109,7 +80,7 @@ class Retriever:
         """Use detailed text for Buying and concise title/category for Browsing."""
         from .routing import IntentRoutedRetriever, IntentRoutingConfig
 
-        catalog = Catalog.load(catalog_path)
+        catalog = catalog_path if isinstance(catalog_path, Catalog) else Catalog.load(catalog_path)
         return cls(
             IntentRoutedRetriever(
                 BM25Retriever(
@@ -127,7 +98,7 @@ class Retriever:
         )
 
     @classmethod
-    def sota_default(cls, catalog_path: str) -> Retriever:
+    def sota_default(cls, catalog_path: Catalog | str | Path) -> Retriever:
         """Return the deterministic intent-routed BM25 production strategy."""
         return cls.bm25_intent_routed(
             catalog_path,
@@ -138,7 +109,7 @@ class Retriever:
     @classmethod
     def sota_semantic_residual(
         cls,
-        catalog_path: str,
+        catalog_path: Catalog | str | Path,
         *,
         cache_root: str | Path = Path("artifacts") / "retrieval" / "dense",
     ) -> Retriever:
@@ -166,7 +137,7 @@ class Retriever:
             encoder = OpenAIEmbeddingEncoder.from_env()
             catalog = getattr(lexical.strategy, "catalog", None)
             if catalog is None:
-                catalog = Catalog.load(catalog_path)
+                catalog = catalog_path if isinstance(catalog_path, Catalog) else Catalog.load(catalog_path)
             semantic = DenseRetriever(
                 catalog,
                 encoder,
@@ -190,236 +161,6 @@ class Retriever:
                 ),
             )
         )
-
-    @classmethod
-    def hybrid(
-        cls,
-        bm25: RetrievalStrategy,
-        dense: RetrievalStrategy,
-        *,
-        config: HybridConfig | None = None,
-    ) -> Retriever:
-        from .hybrid import HybridRetriever
-
-        return cls(HybridRetriever(bm25, dense, config=config))
-
-    @classmethod
-    def bm25_dense_rrf(
-        cls,
-        catalog_path: str,
-        encoder: EmbeddingEncoder,
-        cache_dir: str | Path | None = None,
-        *,
-        text_version: str = DEFAULT_TEXT_VERSION,
-        source_k: int = 100,
-        rank_constant: float = 60.0,
-        query_embedding_mode: str = "query_instruction",
-        query_instruction: str | None = None,
-        fallback_to_bm25: bool = True,
-    ) -> Retriever:
-        """Build the team-ready BM25 + Dense reciprocal-rank fusion strategy."""
-        from .hybrid import HybridConfig
-
-        return cls._bm25_dense(
-            catalog_path,
-            encoder,
-            cache_dir,
-            text_version=text_version,
-            query_embedding_mode=query_embedding_mode,
-            query_instruction=query_instruction,
-            config=HybridConfig(
-                method="rrf",
-                source_k=source_k,
-                rank_constant=rank_constant,
-                fallback_to_bm25=fallback_to_bm25,
-            ),
-        )
-
-    @classmethod
-    def bm25_dense_weighted(
-        cls,
-        catalog_path: str,
-        encoder: EmbeddingEncoder,
-        cache_dir: str | Path | None = None,
-        *,
-        text_version: str = DEFAULT_TEXT_VERSION,
-        source_k: int = 100,
-        alpha: float = 0.5,
-        query_embedding_mode: str = "query_instruction",
-        query_instruction: str | None = None,
-        fallback_to_bm25: bool = True,
-    ) -> Retriever:
-        """Build the team-ready normalized BM25 + Dense weighted strategy."""
-        from .hybrid import HybridConfig
-
-        return cls._bm25_dense(
-            catalog_path,
-            encoder,
-            cache_dir,
-            text_version=text_version,
-            query_embedding_mode=query_embedding_mode,
-            query_instruction=query_instruction,
-            config=HybridConfig(
-                method="weighted",
-                source_k=source_k,
-                alpha=alpha,
-                fallback_to_bm25=fallback_to_bm25,
-            ),
-        )
-
-    @classmethod
-    def bm25_intent_routed_dense_weighted(
-        cls,
-        catalog_path: str,
-        encoder: EmbeddingEncoder,
-        cache_dir: str | Path | None = None,
-        *,
-        text_version: str = DEFAULT_TEXT_VERSION,
-        browsing_text_version: str | ProductTextConfig = "title_category_v1",
-        browsing_max_turn: int | None = 1,
-        source_k: int = 200,
-        alpha: float = 0.7,
-        query_embedding_mode: str = "query_instruction",
-        query_instruction: str | None = None,
-        fallback_to_bm25: bool = True,
-    ) -> Retriever:
-        """Build the RET-008 winner: routed BM25 + Dense weighted fusion.
-
-        Buying and later Browsing turns use ``text_version``.  Only the first
-        Browsing turn uses the concise text representation.  The defaults are
-        the best configuration measured on the public multi-turn Retrieval
-        evaluation; Dense failures retain the deterministic BM25 route.
-        """
-        from .dense import DenseRetriever
-        from .embedding import default_embedding_cache_dir
-        from .hybrid import HybridConfig, HybridRetriever
-        from .routing import IntentRoutedRetriever, IntentRoutingConfig
-
-        catalog = Catalog.load(catalog_path)
-        resolved_cache = cache_dir or default_embedding_cache_dir(
-            encoder.model,
-            encoder.dimension,
-            text_version,
-        )
-        bm25 = IntentRoutedRetriever(
-            BM25Retriever(catalog, text_version=text_version),
-            BM25Retriever(catalog, text_version=browsing_text_version),
-            config=IntentRoutingConfig(browsing_max_turn=browsing_max_turn),
-        )
-        dense = DenseRetriever(
-            catalog,
-            encoder,
-            resolved_cache,
-            text_version=text_version,
-            query_embedding_mode=query_embedding_mode,
-            query_instruction=query_instruction,
-        )
-        return cls(
-            HybridRetriever(
-                bm25,
-                dense,
-                config=HybridConfig(
-                    method="weighted",
-                    source_k=source_k,
-                    alpha=alpha,
-                    fallback_to_bm25=fallback_to_bm25,
-                ),
-            )
-        )
-
-    @classmethod
-    def intent_routed_hybrid_weighted(
-        cls,
-        catalog_path: str,
-        encoder: EmbeddingEncoder,
-        cache_dir: str | Path | None = None,
-        *,
-        text_version: str = DEFAULT_TEXT_VERSION,
-        browsing_text_version: str | ProductTextConfig = "title_category_v1",
-        browsing_max_turn: int | None = 1,
-        source_k: int = 200,
-        alpha: float = 0.7,
-        query_embedding_mode: str = "query_instruction",
-        query_instruction: str | None = None,
-        fallback_to_bm25: bool = True,
-    ) -> Retriever:
-        """Route Browsing warm-start outside the detailed Hybrid strategy.
-
-        The first Browsing turn uses concise BM25 alone, matching the measured
-        SOTA lexical policy without reintroducing long-field Dense noise. Buying,
-        unknown intent, and later Browsing turns use detailed BM25 + Dense.
-        """
-        from .dense import DenseRetriever
-        from .embedding import default_embedding_cache_dir
-        from .hybrid import HybridConfig, HybridRetriever
-        from .routing import IntentRoutedRetriever, IntentRoutingConfig
-
-        catalog = Catalog.load(catalog_path)
-        resolved_cache = cache_dir or default_embedding_cache_dir(
-            encoder.model,
-            encoder.dimension,
-            text_version,
-        )
-        detailed_bm25 = BM25Retriever(catalog, text_version=text_version)
-        browsing_bm25 = BM25Retriever(catalog, text_version=browsing_text_version)
-        dense = DenseRetriever(
-            catalog,
-            encoder,
-            resolved_cache,
-            text_version=text_version,
-            query_embedding_mode=query_embedding_mode,
-            query_instruction=query_instruction,
-        )
-        detailed_hybrid = HybridRetriever(
-            detailed_bm25,
-            dense,
-            config=HybridConfig(
-                method="weighted",
-                source_k=source_k,
-                alpha=alpha,
-                fallback_to_bm25=fallback_to_bm25,
-            ),
-        )
-        return cls(
-            IntentRoutedRetriever(
-                detailed_hybrid,
-                browsing_bm25,
-                config=IntentRoutingConfig(browsing_max_turn=browsing_max_turn),
-            )
-        )
-
-    @classmethod
-    def _bm25_dense(
-        cls,
-        catalog_path: str,
-        encoder: EmbeddingEncoder,
-        cache_dir: str | Path | None,
-        *,
-        text_version: str,
-        query_embedding_mode: str,
-        query_instruction: str | None,
-        config: HybridConfig,
-    ) -> Retriever:
-        from .dense import DenseRetriever
-        from .embedding import default_embedding_cache_dir
-        from .hybrid import HybridRetriever
-
-        catalog = Catalog.load(catalog_path)
-        resolved_cache = cache_dir or default_embedding_cache_dir(
-            encoder.model,
-            encoder.dimension,
-            text_version,
-        )
-        bm25 = BM25Retriever(catalog, text_version=text_version)
-        dense = DenseRetriever(
-            catalog,
-            encoder,
-            resolved_cache,
-            text_version=text_version,
-            query_embedding_mode=query_embedding_mode,
-            query_instruction=query_instruction,
-        )
-        return cls(HybridRetriever(bm25, dense, config=config))
 
     def retrieve(
         self,

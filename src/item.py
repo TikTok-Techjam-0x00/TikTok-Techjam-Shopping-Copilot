@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias
+from typing import Any, ClassVar, TypeAlias
 
 from .attribute import (
     AttributeMap,
@@ -55,24 +55,38 @@ def _optional_int(value: object) -> int | None:
 
 
 class _MappingView(Mapping[str, Any]):
-    """Let pipeline objects work with existing dictionary-based consumers."""
+    """Read declared fields without serializing unrelated product data."""
+
+    _mapping_fields: ClassVar[tuple[str, ...]] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        raise NotImplementedError
+        """Return the public JSON shape with isolated list/dict containers."""
+        return {key: self[key] for key in self._mapping_fields}
 
     def __getitem__(self, key: str) -> Any:
-        return self.to_dict()[key]
+        if key not in self._mapping_fields:
+            raise KeyError(key)
+        value = getattr(self, key)
+        if isinstance(value, _MappingView):
+            return value.to_dict()
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, dict):
+            return dict(value)
+        return value
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.to_dict())
+        return iter(self._mapping_fields)
 
     def __len__(self) -> int:
-        return len(self.to_dict())
+        return len(self._mapping_fields)
 
 
 @dataclass(slots=True)
 class Item(_MappingView):
     """One product with official catalog fields and internal derived attributes."""
+
+    _mapping_fields: ClassVar[tuple[str, ...]] = DATASET_FIELDS
 
     parent_asin: str
     title: str = ""
@@ -115,11 +129,6 @@ class Item(_MappingView):
             )
         return self._derived_attributes
 
-    @property
-    def derived_attributes(self) -> AttributeMap:
-        """Explicit alias distinguishing internal attributes from catalog fields."""
-        return self.attributes
-
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Item:
         """Build an Item from one JSONL catalog record."""
@@ -138,25 +147,14 @@ class Item(_MappingView):
             store=str(store) if store not in (None, "") else None,
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return only the official dataset shape, safe for JSON serialization."""
-        return {
-            "parent_asin": self.parent_asin,
-            "title": self.title,
-            "features": list(self.features),
-            "description": list(self.description),
-            "price": self.price,
-            "categories": list(self.categories),
-            "details": dict(self.details),
-            "average_rating": self.average_rating,
-            "rating_number": self.rating_number,
-            "store": self.store,
-        }
-
 
 @dataclass(slots=True)
 class Candidate(_MappingView):
     """Retrieval output: a catalog Item plus retrieval-stage metadata."""
+
+    _mapping_fields: ClassVar[tuple[str, ...]] = (
+        "item", "bm25_score", "dense_score", "retrieval_score", "retrieval_rank",
+    )
 
     item: Item
     bm25_score: float | None = None
@@ -194,19 +192,14 @@ class Candidate(_MappingView):
             retrieval_rank=_optional_int(value.get("retrieval_rank")),
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "item": self.item.to_dict(),
-            "bm25_score": self.bm25_score,
-            "dense_score": self.dense_score,
-            "retrieval_score": self.retrieval_score,
-            "retrieval_rank": self.retrieval_rank,
-        }
-
 
 @dataclass(slots=True)
 class RankedCandidate(_MappingView):
     """Reranking output: an Item plus retrieval and reranking metadata."""
+
+    _mapping_fields: ClassVar[tuple[str, ...]] = Candidate._mapping_fields + (
+        "rerank_score", "rerank_rank", "matched", "violation",
+    )
 
     item: Item
     bm25_score: float | None = None
@@ -221,24 +214,6 @@ class RankedCandidate(_MappingView):
     @property
     def parent_asin(self) -> str:
         return self.item.parent_asin
-
-    @property
-    def score(self) -> float:
-        """Compatibility alias; new code should use rerank_score."""
-        return self.rerank_score
-
-    @property
-    def rank(self) -> int:
-        """Compatibility alias; new code should use rerank_rank."""
-        return self.rerank_rank
-
-    @property
-    def matched_attributes(self) -> list[str]:
-        return self.matched
-
-    @property
-    def violations(self) -> list[str]:
-        return self.violation
 
     @classmethod
     def from_candidate(
@@ -262,30 +237,9 @@ class RankedCandidate(_MappingView):
             violation=list(violation),
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "item": self.item.to_dict(),
-            "bm25_score": self.bm25_score,
-            "dense_score": self.dense_score,
-            "retrieval_score": self.retrieval_score,
-            "retrieval_rank": self.retrieval_rank,
-            "rerank_score": self.rerank_score,
-            "rerank_rank": self.rerank_rank,
-            "matched": list(self.matched),
-            "violation": list(self.violation),
-        }
-
 
 Candidates100: TypeAlias = list[Candidate]
 Candidates10: TypeAlias = list[RankedCandidate]
-
-# Transitional aliases for code written before the composition refactor.
-item = Item
-candidate = Candidate
-reranked_candidate = RankedCandidate
-candidates_100: TypeAlias = Candidates100
-candidates_10: TypeAlias = Candidates10
-
 
 __all__ = [
     "DATASET_FIELDS",
@@ -294,9 +248,4 @@ __all__ = [
     "RankedCandidate",
     "Candidates100",
     "Candidates10",
-    "item",
-    "candidate",
-    "reranked_candidate",
-    "candidates_100",
-    "candidates_10",
 ]

@@ -35,9 +35,9 @@ LOGGER = logging.getLogger("shopping_copilot.frontend")
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Shopping Copilot Demo", version="1.0.0")
-agent = Agent(CATALOG_PATH)
 catalog = Catalog.load(CATALOG_PATH)
-trace_runner = TraceRunner(CATALOG_PATH)
+agent = Agent(CATALOG_PATH, catalog=catalog)
+trace_runner = TraceRunner(catalog)
 scenario_runner = ScenarioRunner(REPOSITORY_ROOT / "data" / "public_set.jsonl", catalog)
 sessions: dict[str, dict[str, int]] = {}
 session_lock = threading.RLock()

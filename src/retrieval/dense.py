@@ -19,7 +19,7 @@ QUERY_EMBEDDING_MODES = frozenset({"symmetric", "query", "query_instruction"})
 
 
 class DenseRetrievalError(RuntimeError):
-    """Wrap provider failures so Hybrid Retrieval can use its BM25 fallback."""
+    """Wrap provider failures so semantic residuals can fall back to BM25."""
 
 
 class DenseRetriever:
@@ -79,7 +79,7 @@ class DenseRetriever:
         return values / norm if norm > 0.0 else values
 
     def preload_queries(self, queries: Sequence[str], *, batch_size: int | None = None) -> None:
-        """Batch query encoding for repeatable experiments without duplicate API calls."""
+        """Encode and cache missing queries without duplicate provider calls."""
         missing = list(dict.fromkeys(query for query in queries if query and query not in self._query_vectors))
         size = int(batch_size or getattr(self.encoder, "batch_size", 10))
         if size <= 0:

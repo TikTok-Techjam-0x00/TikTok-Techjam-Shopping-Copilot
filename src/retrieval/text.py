@@ -69,59 +69,20 @@ class ProductTextConfig:
             raise ValueError(f"unknown product text fields: {sorted(unknown)}")
         if len(self.fields) != len(set(self.fields)):
             raise ValueError("product text fields must be unique")
-        if self.layout not in {
-            "generic_labeled",
-            "dense_attributes_labeled",
-            "dense_attributes_unlabeled",
-            "dense_identity",
-            "dense_needs",
-        }:
+        if self.layout not in {"generic_labeled", "dense_needs"}:
             raise ValueError(f"unknown product text layout: {self.layout!r}")
 
 
 TEXT_CONFIGS: dict[str, ProductTextConfig] = {
-    "title_v0": ProductTextConfig(
-        name="title_v0",
-        fields=("title",),
-        description="Title only.",
-    ),
     "title_category_v1": ProductTextConfig(
         name="title_category_v1",
         fields=("title", "categories"),
         description="Title and catalog category hierarchy.",
     ),
-    "core_v2": ProductTextConfig(
-        name="core_v2",
-        fields=("title", "categories", "features"),
-        description="High-signal official fields without long details or description.",
-    ),
-    "core_attributes_v3": ProductTextConfig(
-        name="core_attributes_v3",
-        fields=("title", "categories", "features", "attributes"),
-        description="Core official fields plus selected normalized product attributes.",
-    ),
     "all_fields_v4": ProductTextConfig(
         name="all_fields_v4",
         fields=("title", "categories", "features", "details", "store", "description"),
         description="Current BM25 baseline: all searchable official text fields.",
-    ),
-    "dense_attributes_v2": ProductTextConfig(
-        name="dense_attributes_v2",
-        fields=("title", "categories", "features", "attributes"),
-        description="Compact Dense text using the official ten-field attribute contract.",
-        layout="dense_attributes_labeled",
-    ),
-    "dense_attributes_v2_unlabeled": ProductTextConfig(
-        name="dense_attributes_v2_unlabeled",
-        fields=("title", "categories", "features", "attributes"),
-        description="The same compact Dense values without repeated field labels.",
-        layout="dense_attributes_unlabeled",
-    ),
-    "dense_identity_v1": ProductTextConfig(
-        name="dense_identity_v1",
-        fields=("title", "categories", "attributes"),
-        description="Identity vector: title, product type, and brand.",
-        layout="dense_identity",
     ),
     "dense_needs_v1": ProductTextConfig(
         name="dense_needs_v1",
@@ -190,14 +151,6 @@ def _limited(value: str, max_chars: int) -> str:
     return value[:max_chars].rsplit(" ", 1)[0].strip()
 
 
-def _dense_identity_parts(item: Item) -> list[tuple[str, str]]:
-    return [
-        ("Title", _flatten(item.title)),
-        ("Product type", _attribute_text(item, AttributeName.CATEGORY)),
-        ("Brand", _attribute_text(item, AttributeName.BRAND)),
-    ]
-
-
 def _dense_needs_parts(item: Item) -> list[tuple[str, str]]:
     return [
         ("Material", _attribute_text(item, AttributeName.MATERIAL)),
@@ -210,9 +163,9 @@ def _dense_needs_parts(item: Item) -> list[tuple[str, str]]:
     ]
 
 
-def _render_parts(parts: Sequence[tuple[str, str]], *, labeled: bool) -> str:
+def _render_parts(parts: Sequence[tuple[str, str]]) -> str:
     return "\n".join(
-        f"{label}: {value}" if labeled else value
+        f"{label}: {value}"
         for label, value in parts
         if value
     )
@@ -254,22 +207,10 @@ def build_product_text(
     item: Item,
     version: str | ProductTextConfig = DEFAULT_TEXT_VERSION,
 ) -> str:
-    """Return labeled unified text suitable for future dense embeddings."""
+    """Reproduce the exact labeled text used to fingerprint the vector cache."""
     config = resolve_text_config(version)
-    if config.layout == "dense_attributes_labeled":
-        return _render_parts(
-            [*_dense_identity_parts(item), *_dense_needs_parts(item)],
-            labeled=True,
-        )
-    if config.layout == "dense_attributes_unlabeled":
-        return _render_parts(
-            [*_dense_identity_parts(item), *_dense_needs_parts(item)],
-            labeled=False,
-        )
-    if config.layout == "dense_identity":
-        return _render_parts(_dense_identity_parts(item), labeled=True)
     if config.layout == "dense_needs":
-        return _render_parts(_dense_needs_parts(item), labeled=True)
+        return _render_parts(_dense_needs_parts(item))
     lines = []
     for field in config.fields:
         value = product_field_text(item, field)

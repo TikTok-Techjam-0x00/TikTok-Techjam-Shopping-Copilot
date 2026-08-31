@@ -1,18 +1,15 @@
-"""Embedding providers and reproducible on-disk catalog caches."""
+"""Query embedding providers and validation of the shipped catalog cache."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import re
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -24,7 +21,6 @@ from .text import DEFAULT_TEXT_VERSION, build_product_text, resolve_text_config
 
 
 CACHE_FORMAT_VERSION = 1
-DEFAULT_CACHE_ROOT = Path("artifacts") / "retrieval" / "dense"
 DEFAULT_QUERY_INSTRUCTION = (
     "Given the current shopping request, retrieve catalog products that best match "
     "the requested product type and disclosed constraints. Prioritize the product "
@@ -33,7 +29,7 @@ DEFAULT_QUERY_INSTRUCTION = (
 
 
 class EmbeddingEncoder(Protocol):
-    """Small provider boundary used by cache building and query retrieval."""
+    """Small provider boundary used by query retrieval."""
 
     model: str
     dimension: int
@@ -299,16 +295,6 @@ def _validate_embedding_batch(matrix: np.ndarray, rows: int, dimension: int) -> 
         raise ValueError("embedding provider returned non-finite values")
 
 
-def normalize_embeddings(matrix: np.ndarray) -> np.ndarray:
-    """Return float32 L2-normalized rows, preserving zero vectors."""
-    values = np.asarray(matrix, dtype=np.float32)
-    if values.ndim != 2:
-        raise ValueError("embeddings must be a two-dimensional matrix")
-    norms = np.linalg.norm(values, axis=1, keepdims=True)
-    safe_norms = np.where(norms > 0.0, norms, 1.0)
-    return np.asarray(values / safe_norms, dtype=np.float32)
-
-
 def catalog_text_fingerprint(
     catalog: Catalog,
     text_version: str = DEFAULT_TEXT_VERSION,
@@ -323,37 +309,6 @@ def catalog_text_fingerprint(
         digest.update(build_product_text(product, config).encode("utf-8"))
         digest.update(b"\0")
     return digest.hexdigest()
-
-
-def default_embedding_cache_dir(
-    model: str,
-    dimension: int,
-    text_version: str = DEFAULT_TEXT_VERSION,
-    *,
-    root: str | Path = DEFAULT_CACHE_ROOT,
-) -> Path:
-    safe_model = re.sub(r"[^a-zA-Z0-9._-]+", "_", model).strip("._") or "model"
-    config = resolve_text_config(text_version)
-    return Path(root) / f"{safe_model}__{config.name}__d{dimension}"
-
-
-def _atomic_json(path: Path, value: object) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    for attempt in range(6):
-        try:
-            temporary.replace(path)
-            return
-        except PermissionError:
-            # Windows Defender/indexers can briefly hold the destination file.
-            # Retrying preserves the atomic checkpoint without weakening it to
-            # an in-place write that could leave truncated JSON after a crash.
-            if attempt == 5:
-                raise
-            time.sleep(0.05 * (2**attempt))
 
 
 def _read_json(path: Path) -> Any:
@@ -431,147 +386,14 @@ def load_embedding_cache(
     )
 
 
-def build_embedding_cache(
-    catalog: Catalog,
-    encoder: EmbeddingEncoder,
-    cache_dir: str | Path,
-    *,
-    text_version: str = DEFAULT_TEXT_VERSION,
-    batch_size: int | None = None,
-    workers: int = 1,
-    force: bool = False,
-    progress: Callable[[int, int], None] | None = None,
-) -> LoadedEmbeddingCache:
-    """Batch encode the catalog with resumable progress and a memory-mapped cache."""
-    config = resolve_text_config(text_version)
-    directory = Path(cache_dir)
-    directory.mkdir(parents=True, exist_ok=True)
-    actual_batch_size = _positive_int(
-        batch_size or getattr(encoder, "batch_size", 10),
-        "batch_size",
-    )
-    actual_workers = _positive_int(workers, "workers")
-    fingerprint = catalog_text_fingerprint(catalog, config.name)
-
-    if not force:
-        try:
-            return load_embedding_cache(
-                catalog,
-                encoder,
-                directory,
-                text_version=config.name,
-                fingerprint=fingerprint,
-            )
-        except EmbeddingCacheError as error:
-            if (directory / "manifest.json").exists():
-                raise EmbeddingCacheError(f"{error}; pass force=True to rebuild") from error
-
-    partial_path = directory / "embeddings.partial.npy"
-    progress_path = directory / "progress.json"
-    progress_raw: dict[str, Any] = {}
-    if progress_path.is_file() and partial_path.is_file() and not force:
-        value = _read_json(progress_path)
-        if isinstance(value, dict):
-            progress_raw = value
-    resumable = (
-        progress_raw.get("model") == encoder.model
-        and progress_raw.get("dimension") == encoder.dimension
-        and progress_raw.get("text_version") == config.name
-        and progress_raw.get("catalog_fingerprint") == fingerprint
-        and progress_raw.get("item_count") == len(catalog)
-    )
-    if resumable:
-        try:
-            start = int(progress_raw.get("next_index", 0))
-        except (TypeError, ValueError) as error:
-            raise EmbeddingCacheError("partial embedding progress is invalid") from error
-        if not 0 <= start <= len(catalog):
-            raise EmbeddingCacheError("partial embedding progress is outside catalog bounds")
-        matrix = np.lib.format.open_memmap(partial_path, mode="r+")
-        if matrix.shape != (len(catalog), encoder.dimension) or matrix.dtype != np.float32:
-            raise EmbeddingCacheError("partial embedding cache has an incompatible shape or dtype")
-    else:
-        start = 0
-        matrix = np.lib.format.open_memmap(
-            partial_path,
-            mode="w+",
-            dtype=np.float32,
-            shape=(len(catalog), encoder.dimension),
-        )
-
-    products = catalog.items_in_order
-    if progress is not None:
-        progress(start, len(products))
-    offsets = range(start, len(products), actual_batch_size)
-
-    def encode_batch(offset: int) -> tuple[int, int, np.ndarray]:
-        batch = products[offset : offset + actual_batch_size]
-        texts = [build_product_text(product, config) for product in batch]
-        encoded = np.asarray(encoder.encode(texts), dtype=np.float32)
-        _validate_embedding_batch(encoded, len(batch), encoder.dimension)
-        return offset, len(batch), encoded
-
-    with ThreadPoolExecutor(max_workers=actual_workers) as executor:
-        encoded_batches = executor.map(encode_batch, offsets)
-        for offset, batch_length, encoded in encoded_batches:
-            matrix[offset : offset + batch_length] = normalize_embeddings(encoded)
-            matrix.flush()
-            completed = offset + batch_length
-            _atomic_json(
-                progress_path,
-                {
-                    "model": encoder.model,
-                    "dimension": encoder.dimension,
-                    "text_version": config.name,
-                    "catalog_fingerprint": fingerprint,
-                    "item_count": len(catalog),
-                    "next_index": completed,
-                },
-            )
-            if progress is not None:
-                progress(completed, len(products))
-
-    del matrix
-    embeddings_path = directory / "embeddings.npy"
-    partial_path.replace(embeddings_path)
-    parent_asins = list(catalog)
-    _atomic_json(directory / "parent_asins.json", parent_asins)
-    manifest = EmbeddingCacheManifest(
-        format_version=CACHE_FORMAT_VERSION,
-        model=encoder.model,
-        dimension=encoder.dimension,
-        text_version=config.name,
-        catalog_fingerprint=fingerprint,
-        item_count=len(catalog),
-        normalized=True,
-        created_at_utc=datetime.now(timezone.utc).isoformat(),
-    )
-    _atomic_json(directory / "manifest.json", asdict(manifest))
-    if progress_path.exists():
-        progress_path.unlink()
-    loaded = load_embedding_cache(
-        catalog,
-        encoder,
-        directory,
-        text_version=config.name,
-        fingerprint=fingerprint,
-    )
-    loaded.cache_hit = False
-    return loaded
-
-
 __all__ = [
     "CACHE_FORMAT_VERSION",
-    "DEFAULT_CACHE_ROOT",
     "EmbeddingEncoder",
     "EmbeddingCacheError",
     "EmbeddingCacheManifest",
     "LoadedEmbeddingCache",
     "OpenAIEmbeddingConfig",
     "OpenAIEmbeddingEncoder",
-    "normalize_embeddings",
     "catalog_text_fingerprint",
-    "default_embedding_cache_dir",
     "load_embedding_cache",
-    "build_embedding_cache",
 ]

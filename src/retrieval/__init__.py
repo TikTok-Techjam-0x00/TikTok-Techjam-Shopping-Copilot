@@ -1,4 +1,4 @@
-"""Module 1: lexical, dense, and hybrid product retrieval."""
+"""Module 1: lexical retrieval with optional semantic residuals."""
 
 from .bm25 import BM25Retriever, BM25Weights
 from .catalog import Catalog, CatalogLoadStats
@@ -10,19 +10,8 @@ from .embedding import (
     LoadedEmbeddingCache,
     OpenAIEmbeddingConfig,
     OpenAIEmbeddingEncoder,
-    build_embedding_cache,
-    default_embedding_cache_dir,
     load_embedding_cache,
 )
-from .hybrid import (
-    HybridConfig,
-    HybridRetriever,
-    candidate_union,
-    min_max_normalize,
-    reciprocal_rank_fusion,
-    weighted_score_fusion,
-)
-from .multivector import MultiVectorConfig, MultiVectorDenseRetriever
 from .query import build_retrieval_query
 from .residual import LexicalGatedResidualRetriever, ResidualDenseConfig
 from .retriever import Retriever, retrieve
@@ -50,17 +39,7 @@ __all__ = [
     "LoadedEmbeddingCache",
     "OpenAIEmbeddingConfig",
     "OpenAIEmbeddingEncoder",
-    "build_embedding_cache",
     "load_embedding_cache",
-    "default_embedding_cache_dir",
-    "HybridConfig",
-    "HybridRetriever",
-    "candidate_union",
-    "min_max_normalize",
-    "reciprocal_rank_fusion",
-    "weighted_score_fusion",
-    "MultiVectorConfig",
-    "MultiVectorDenseRetriever",
     "LexicalGatedResidualRetriever",
     "ResidualDenseConfig",
     "Retriever",

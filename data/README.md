@@ -27,10 +27,6 @@ The script only reads a local archive: it does not download data. Without
 count: 50,000. The extracted catalog is ignored by Git; the full upstream
 Amazon Reviews dataset is not required.
 
-The team's generated generalization datasets and their generator were removed
-with the offline experiment framework. Only official public validation data
-and the locally prepared catalog remain; the Agent does not read target labels.
-
 See the [project README](../README.md) for installation, runtime-mode controls,
 and complete evaluation commands.
 

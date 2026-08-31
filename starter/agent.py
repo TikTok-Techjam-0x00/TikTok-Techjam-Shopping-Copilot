@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.pipeline import Pipeline
+from src.retrieval import Catalog
 from src.state import (
     SemanticPolicy,
     SemanticResolver,
@@ -22,6 +23,7 @@ class Agent:
         self,
         catalog_path: str | Path = "data/catalog.jsonl",
         *,
+        catalog: Catalog | None = None,
         semantic_resolver: SemanticResolver | None | object = _AUTO_RESOLVER,
         semantic_policy: SemanticPolicy | None = None,
     ) -> None:
@@ -32,6 +34,7 @@ class Agent:
         )
         self.pipeline = Pipeline(
             catalog_path,
+            catalog=catalog,
             semantic_resolver=configured_resolver,
             semantic_policy=semantic_policy,
         )
