@@ -1,5 +1,11 @@
 ![0x00 Shopping Copilot — architecture, sample conversation, and Public-200 results](docs/49445d914dab6319a4303372395713f5.png)
 
+## 🎬 Demo Video
+
+[![Watch the 0x00 Shopping Copilot Demo](https://img.youtube.com/vi/tSkZy2qN8lI/maxresdefault.jpg)](https://youtu.be/tSkZy2qN8lI)
+
+▶️ **[Watch the full Shopping Copilot demo on YouTube](https://youtu.be/tSkZy2qN8lI)**
+
 # TikTok TechJam Shopping Copilot
 
 > 🛒 **Understand deeply. Search widely. Recommend precisely.**

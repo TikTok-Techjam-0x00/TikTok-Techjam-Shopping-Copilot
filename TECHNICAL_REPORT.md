@@ -9,6 +9,7 @@
 ![MRR](https://img.shields.io/badge/MRR-0.960833-059669?style=flat-square)
 ![MTTC](https://img.shields.io/badge/MTTC-2.23-f59e0b?style=flat-square)
 
+[🎬 Watch Demo](https://youtu.be/tSkZy2qN8lI) ·
 [🏠 Back to README](README.md) · [📊 Jump to Results](#-6-evaluation-results) ·
 [⚠️ Jump to Limitations](#️-8-limitations)
 
