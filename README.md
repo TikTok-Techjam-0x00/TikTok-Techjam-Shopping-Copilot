@@ -5,6 +5,10 @@ Team 0x00's final Agent for TechJam 2026 Track 4, based on `sota-2.2`
 This submission keeps the core Agent, the presentation frontend, and the
 official participant evaluation toolkit and documents.
 
+For the design rationale and turn-by-turn implementation—including State and
+intent handling, Retrieval, Reranking, clarification, evaluation, runtime, and
+limitations—see the [Technical Report](TECHNICAL_REPORT.md).
+
 ## Agent entry point
 
 The official evaluator imports `Agent` from `starter/agent.py`:
