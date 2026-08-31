@@ -27,16 +27,10 @@ The script only reads a local archive: it does not download data. Without
 count: 50,000. The extracted catalog is ignored by Git; the full upstream
 Amazon Reviews dataset is not required.
 
-## `generalization/v1/`
+The team's generated generalization datasets and their generator were removed
+with the offline experiment framework. Only official public validation data
+and the locally prepared catalog remain; the Agent does not read target labels.
 
-Three generated 800-session development sets are included: IID, long-tail,
-and stress. They exclude Public-200 targets and are mutually target-disjoint.
-They are not the organizer's private 800-session final test set. See the
-[generation manifest and data notes](generalization/v1/README.md) for their
-construction and checksums.
-
-Run a set with the official evaluator's `--dataset` option and save results
-outside this directory, for example under `artifacts/release-validation/`.
 See the [project README](../README.md) for installation, runtime-mode controls,
 and complete evaluation commands.
 

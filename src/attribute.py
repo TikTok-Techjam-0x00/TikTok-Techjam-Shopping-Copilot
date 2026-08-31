@@ -4,8 +4,8 @@
 vocabulary. Catalog/detail aliases are normalized into these ten fields, and
 unrecognized source fields are retained under ``AttributeName.OTHER``.
 
-The former richer schema is preserved in :mod:`src.atrribute_detailed` for
-comparison and experiments. Production modules should import this file.
+The retired richer schema remains in the development history. Production
+modules should import this file.
 """
 
 from __future__ import annotations

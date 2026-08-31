@@ -8,7 +8,7 @@ __pycache__/
 .env.*
 !.env.example
 results.json
-!results_history/**/results.json
+results_history/
 artifacts/
 results-*.json
 data/catalog.jsonl
