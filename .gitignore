@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 .env
+.env.*
+!.env.example
 results.json
 !results_history/**/results.json
 artifacts/
@@ -26,3 +28,8 @@ docs/participant_release_checklist.md
 tests/test_5core_builder.py
 tests/test_organizer_pipeline.py
 *.log
+# Downloaded release archives and local checksums (not source code).
+/*.gz
+/*.zip
+/SHA256SUMS
+/SHA256SUMS.*
